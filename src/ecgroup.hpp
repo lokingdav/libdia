@@ -1,5 +1,5 @@
-#ifndef SHIM_ECGROUP_HPP
-#define SHIM_ECGROUP_HPP
+#ifndef DIA_ECGROUP_HPP
+#define DIA_ECGROUP_HPP
 
 #include <mcl/bn.hpp>
 #include <vector>
@@ -127,4 +127,4 @@ namespace ecgroup {
 
 } // namespace ecgroup
 
-#endif // SHIM_ECGROUP_HPP
+#endif // DIA_ECGROUP_HPP
