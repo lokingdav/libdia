@@ -25,6 +25,7 @@
 # Fortran module files
 *.mod
 *.smod
+!go.mod
 
 # Compiled Static libraries
 *.lai
@@ -39,3 +40,4 @@
 
 # debug information files
 *.dwo
+build
