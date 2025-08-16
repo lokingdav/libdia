@@ -1,7 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
-
 #include "voprf.hpp"
 #include "ecgroup.hpp"
+#include <vector>
+#include <string>
 
 // Test case for the Verifiable Oblivious Pseudorandom Function protocol
 TEST_CASE("VOPRF Protocol", "[voprf]") {
@@ -58,5 +59,46 @@ TEST_CASE("VOPRF Protocol", "[voprf]") {
         // Test Case 3: Verification should fail with a tampered/modified output.
         ecgroup::G1Point tampered_output = final_output.add(ecgroup::G1Point::get_random());
         REQUIRE_FALSE(voprf::verify(input, tampered_output, kp1.pk));
+    }
+
+    SECTION("Batch Verification") {
+        // 1. Setup: Generate a keypair and a batch of 3 input/output pairs.
+        voprf::KeyPair kp = voprf::keygen();
+        std::vector<std::string> inputs = {"input1", "input2", "input3"};
+        std::vector<ecgroup::G1Point> outputs;
+        
+        for (const auto& input : inputs) {
+            auto [blinded_element, blind_scalar] = voprf::blind(input);
+            ecgroup::G1Point evaluated_element = ecgroup::G1Point::mul(blinded_element, kp.sk);
+            outputs.push_back(voprf::unblind(evaluated_element, blind_scalar));
+        }
+
+        // 2. Success Case: Verification should pass with correct data.
+        REQUIRE(voprf::verify_batch(inputs, outputs, kp.pk) == true);
+        
+        // Test with a single item batch, which should also work.
+        std::vector<std::string> single_input = {"input1"};
+        std::vector<ecgroup::G1Point> single_output = {outputs[0]};
+        REQUIRE(voprf::verify_batch(single_input, single_output, kp.pk) == true);
+
+        // 3. Failure Cases
+        
+        // Case 3a: Wrong public key
+        voprf::KeyPair kp2 = voprf::keygen();
+        REQUIRE_FALSE(voprf::verify_batch(inputs, outputs, kp2.pk));
+
+        // Case 3b: Tampered output in the batch
+        std::vector<ecgroup::G1Point> tampered_outputs = outputs;
+        tampered_outputs[1] = tampered_outputs[1].add(ecgroup::G1Point::get_random());
+        REQUIRE_FALSE(voprf::verify_batch(inputs, tampered_outputs, kp.pk));
+
+        // Case 3c: Mismatched input/output vectors (wrong size)
+        std::vector<std::string> fewer_inputs = {"input1", "input2"};
+        REQUIRE_FALSE(voprf::verify_batch(fewer_inputs, outputs, kp.pk));
+
+        // Case 3d: Empty vectors
+        std::vector<std::string> empty_inputs;
+        std::vector<ecgroup::G1Point> empty_outputs;
+        REQUIRE_FALSE(voprf::verify_batch(empty_inputs, empty_outputs, kp.pk));
     }
 }
