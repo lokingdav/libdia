@@ -15,6 +15,7 @@ FetchContent_MakeAvailable(Catch2)
 set(TEST_SRC_FILES
     test_ecgroup.cpp
     test_voprf.cpp
+    test_amf.cpp
 )
 add_executable(run_dia_tests ${TEST_SRC_FILES})
 target_include_directories(run_dia_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
