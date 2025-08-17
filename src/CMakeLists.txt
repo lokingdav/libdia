@@ -25,6 +25,7 @@ add_library(dia
   dia.cpp
   voprf.cpp
   amf.cpp
+  bbs.cpp
 )
 
 target_include_directories(dia
