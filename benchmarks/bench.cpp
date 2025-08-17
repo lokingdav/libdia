@@ -6,7 +6,8 @@
 #include <functional>
 
 #include "dia/dia.hpp"
-#include "amf.hpp"   // <-- add this
+#include "amf.hpp"
+#include "voprf.hpp"
 
 /**
  * @brief A simple class to run benchmarks and print formatted results.
@@ -37,8 +38,8 @@ public:
 int main() {
     ecgroup::init_pairing();
 
-    BenchmarkRunner primitive_runner(10000); // More iterations for fast ops
-    BenchmarkRunner protocol_runner(100);    // Fewer iterations for slow ops
+    BenchmarkRunner primitive_runner(10000); // fast ops
+    BenchmarkRunner protocol_runner(100);    // slower ops
 
     // =====================================================================
     // SECTION 1: Low-Level Cryptographic Primitives
@@ -81,56 +82,124 @@ int main() {
     // =====================================================================
     std::cout << "\n--- AMF (Avg over " << protocol_runner.num_iters << " iters) ---" << std::endl;
 
-    // Params & keys
     amf::Params params = amf::Params::Default();
     amf::KeyPair S = amf::KeyGen(params); // sender
     amf::KeyPair R = amf::KeyGen(params); // receiver
     amf::KeyPair J = amf::KeyGen(params); // judge
     const std::string msg = "hello AMF";
 
-    // Frank (sign)
     protocol_runner.run("AMF Frank (sign)", [&]() {
         auto sig = amf::Frank(S.sk, R.pk, J.pk, msg, params);
-        // prevent over-aggressive DCE
         volatile bool sink = (sig.A == sig.B);
         (void)sink;
     });
 
-    // Precompute a valid signature for Verify/Judge benches
     amf::Signature sig_ok = amf::Frank(S.sk, R.pk, J.pk, msg, params);
 
-    // Verify (receiver check + proof verify)
     protocol_runner.run("AMF Verify (receiver)", [&]() {
         bool ok = amf::Verify(S.pk, R.sk, J.pk, msg, sig_ok, params);
         volatile bool sink = ok;
         (void)sink;
     });
 
-    // Judge (moderator check + proof verify)
     protocol_runner.run("AMF Judge (moderator)", [&]() {
         bool ok = amf::Judge(S.pk, R.pk, J.sk, msg, sig_ok, params);
         volatile bool sink = ok;
         (void)sink;
     });
 
-    // Public Forge (deniability)
     protocol_runner.run("AMF Forge (public)", [&]() {
         auto sig = amf::Forge(S.pk, R.pk, J.pk, msg, params);
-        volatile bool sink = (sig.A == sig.B);
+        volatile bool sink = (sig.T == sig.U);
         (void)sink;
     });
 
-    // Receiver-compromise RForge
     protocol_runner.run("AMF RForge", [&]() {
         auto sig = amf::RForge(S.pk, R.sk, J.pk, msg, params);
-        volatile bool sink = (sig.U == sig.B); // arbitrary use
+        volatile bool sink = (sig.U == ecgroup::G1Point::mul(sig.B, R.sk));
         (void)sink;
     });
 
-    // Judge-compromise JForge
     protocol_runner.run("AMF JForge", [&]() {
         auto sig = amf::JForge(S.pk, R.pk, J.sk, msg, params);
-        volatile bool sink = (sig.T == sig.A); // arbitrary use
+        volatile bool sink = (sig.T == ecgroup::G1Point::mul(sig.A, J.sk));
+        (void)sink;
+    });
+
+    // =====================================================================
+    // SECTION 3: VOPRF
+    // =====================================================================
+    std::cout << "\n--- VOPRF (Avg over " << protocol_runner.num_iters << " iters) ---" << std::endl;
+
+    // Server keygen
+    voprf::KeyPair svr = voprf::keygen();
+    protocol_runner.run("VOPRF KeyGen", [&]() {
+        auto kp = voprf::keygen();
+        volatile bool sink = (kp.pk == svr.pk); // arbitrary
+        (void)sink;
+    });
+
+    // One message to exercise client/server flow
+    const std::string in = "voprf input";
+
+    // Blind
+    protocol_runner.run("VOPRF Blind (client)", [&]() {
+        auto [B, r] = voprf::blind(in);
+        volatile bool sink = (B == ecgroup::G1Point()); // unlikely
+        (void)sink;
+    });
+
+    // Server evaluate (on blinded element): element = sk * B
+    auto [B0, r0] = voprf::blind(in);
+    protocol_runner.run("VOPRF Evaluate (server)", [&]() {
+        auto element = ecgroup::G1Point::mul(B0, svr.sk);
+        volatile bool sink = (element == B0);
+        (void)sink;
+    });
+
+    // Unblind (client)
+    auto element0 = ecgroup::G1Point::mul(B0, svr.sk);
+    protocol_runner.run("VOPRF Unblind (client)", [&]() {
+        auto Y = voprf::unblind(element0, r0);
+        volatile bool sink = (Y == element0);
+        (void)sink;
+    });
+
+    // Verify (single)
+    auto Y0 = voprf::unblind(element0, r0); // final PRF output for `in`
+    protocol_runner.run("VOPRF Verify (single)", [&]() {
+        bool ok = voprf::verify(in, Y0, svr.pk);
+        volatile bool sink = ok;
+        (void)sink;
+    });
+
+    // End-to-end round (blind + eval + unblind + verify)
+    protocol_runner.run("VOPRF End-to-End (1 msg)", [&]() {
+        auto [B, r] = voprf::blind(in);
+        auto element = ecgroup::G1Point::mul(B, svr.sk);
+        auto Y = voprf::unblind(element, r);
+        bool ok = voprf::verify(in, Y, svr.pk);
+        volatile bool sink = ok;
+        (void)sink;
+    });
+
+    // Batch verify: prepare a batch once, then benchmark verification only
+    const size_t N = 32;
+    std::vector<std::string> inputs;
+    std::vector<ecgroup::G1Point> outputs;
+    inputs.reserve(N);
+    outputs.reserve(N);
+    for (size_t i = 0; i < N; ++i) {
+        std::string s = "input_" + std::to_string(i);
+        inputs.push_back(s);
+        // Y_i = sk * H1(s)  (client would get this via blind/eval/unblind)
+        auto Hi = ecgroup::G1Point::hash_and_map_to(s);
+        auto Yi = ecgroup::G1Point::mul(Hi, svr.sk);
+        outputs.push_back(Yi);
+    }
+    protocol_runner.run("VOPRF Verify Batch (N=32)", [&]() {
+        bool ok = voprf::verify_batch(inputs, outputs, svr.pk);
+        volatile bool sink = ok;
         (void)sink;
     });
 
