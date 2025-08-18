@@ -95,12 +95,15 @@ namespace ecgroup {
         value.serialize(b.data(), b.size());
         return b;
     }
+    G1Point G1Point::get_generator() {
+        G1Point g;
+        mcl::bn::mapToG1(g.value, 1);
+        return g;
+    }
     G1Point G1Point::get_random() {
         Scalar s;
         s.set_random();
-        G1Point g1_generator;
-        mcl::bn::hashAndMapToG1(g1_generator.value, "ecgroup_g1_generator");
-        return G1Point::mul(g1_generator, s);
+        return G1Point::mul(G1Point::get_generator(), s);
     }
     G1Point G1Point::hash_and_map_to(const std::string& message) {
         G1Point p;

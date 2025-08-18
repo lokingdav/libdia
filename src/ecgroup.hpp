@@ -63,6 +63,7 @@ namespace ecgroup {
         Bytes to_bytes() const;
 
         static G1Point get_random();
+        static G1Point get_generator();
         static G1Point hash_and_map_to(const std::string& message);
         static G1Point mul(const G1Point& p, const Scalar& s);
         static G1Point from_string(const std::string& s);

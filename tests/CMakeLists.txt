@@ -17,6 +17,7 @@ set(TEST_SRC_FILES
     test_voprf.cpp
     test_amf.cpp
     test_bbs.cpp
+    test_dh.cpp
 )
 add_executable(run_dia_tests ${TEST_SRC_FILES})
 target_include_directories(run_dia_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
