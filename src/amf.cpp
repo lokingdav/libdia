@@ -1,359 +1,98 @@
 #include "amf.hpp"
-#include <array>
+#include <stdexcept>
+#include <cstring>   // std::memcpy
 #include <cstdint>
-#include <cstring>
-
-using namespace ecgroup;
 
 namespace amf {
-namespace {
 
-// ===== Helpers: bytes, length-prefix, hashing (Fiat–Shamir) =====
+using ecgroup::PairingResult;
+using ecgroup::FR_SERIALIZED_SIZE;
+using ecgroup::G1_SERIALIZED_SIZE;
 
-inline Bytes toBytes(const std::string& s) {
-    return Bytes(s.begin(), s.end());
-}
+/* ============================== Utilities =============================== */
 
-inline void appendU32BE(Bytes& out, uint32_t v) {
-    out.push_back(static_cast<uint8_t>((v >> 24) & 0xFF));
-    out.push_back(static_cast<uint8_t>((v >> 16) & 0xFF));
-    out.push_back(static_cast<uint8_t>((v >>  8) & 0xFF));
-    out.push_back(static_cast<uint8_t>((v >>  0) & 0xFF));
-}
+static inline Scalar fr_neg(const Scalar& a) { return Scalar::neg(a); }
+static inline Scalar fr_sub(const Scalar& a, const Scalar& b) { return a + fr_neg(b); }
 
-inline void appendLP(Bytes& out, const Bytes& b) {
-    appendU32BE(out, static_cast<uint32_t>(b.size()));
+static inline void append_bytes(std::vector<uint8_t>& out, const Bytes& b) {
     out.insert(out.end(), b.begin(), b.end());
 }
 
-inline void appendPoint(Bytes& out, const G1Point& P) {
-    appendLP(out, P.to_bytes());
+static inline uint32_t be32(const uint8_t* p) {
+    return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | uint32_t(p[3]);
+}
+static inline void be32_write(std::vector<uint8_t>& out, uint32_t v) {
+    out.push_back(uint8_t((v >> 24) & 0xFF));
+    out.push_back(uint8_t((v >> 16) & 0xFF));
+    out.push_back(uint8_t((v >>  8) & 0xFF));
+    out.push_back(uint8_t((v >>  0) & 0xFF));
 }
 
-inline void appendScalar(Bytes& out, const Scalar& s) {
-    appendLP(out, s.to_bytes());
+/* Schnorr: proof of knowledge of w such that y = w*g (additive group) */
+struct SchnorrT { G1Point t; };
+
+static inline SchnorrT schnorr_commit(const Scalar& a, const G1Point& g) {
+    return { G1Point::mul(g, a) };
 }
-
-// Compute FS challenge c = H(domain || m || statement || commits) -> Fr
-Scalar fs_challenge(const std::string& domain,
-                    const std::string& msg,
-                    const G1Point& pk_s,
-                    const G1Point& pk_j,
-                    const G1Point& T,
-                    const G1Point& U,
-                    const G1Point& A,
-                    const G1Point& B,
-                    const DisjSchnorrSchnorrCommit& left_cmt,
-                    const DisjCPorSchnorrCommit& right_cmt)
-{
-    Bytes buf;
-    appendLP(buf, toBytes(domain));      // domain sep
-    appendLP(buf, toBytes("AMF|DMF|FSv1"));
-
-    appendLP(buf, toBytes(msg));
-
-    appendPoint(buf, pk_s);
-    appendPoint(buf, pk_j);
-    appendPoint(buf, T);
-    appendPoint(buf, U);
-    appendPoint(buf, A);
-    appendPoint(buf, B);
-
-    // Left disjunction commits: (t0, t1)
-    appendPoint(buf, left_cmt.t0);
-    appendPoint(buf, left_cmt.t1);
-
-    // Right disjunction commits: CP (vt, wt), then Schnorr t1
-    appendPoint(buf, right_cmt.cp_t.vt);
-    appendPoint(buf, right_cmt.cp_t.wt);
-    appendPoint(buf, right_cmt.t1);
-
-    return Scalar::hash_to_scalar(buf);
+static inline SchnorrT schnorr_sim(const Scalar& z, const Scalar& c,
+                                   const G1Point& g, const G1Point& y) {
+    // t = z*g - c*y
+    return { G1Point::mul(g, z).add(G1Point::mul(y, fr_neg(c))) };
 }
-
-// Basic group ops helpers
-inline G1Point add(const G1Point& a, const G1Point& b) { return a.add(b); }
-inline G1Point neg(const G1Point& a) { return a.negate(); }
-inline G1Point mul(const G1Point& P, const Scalar& s) { return G1Point::mul(P, s); }
-inline Scalar  sub(const Scalar& a, const Scalar& b) { return a + Scalar::neg(b); }
-
-// ===== Schnorr over G1: y = w * g =====
-struct SchnorrCommitOut {
-    G1Point t;
-    Scalar  r; // nonce
-};
-
-inline SchnorrCommitOut schnorr_commit(const G1Point& g) {
-    SchnorrCommitOut out;
-    out.r = Scalar::get_random();
-    out.t = mul(g, out.r);
-    return out;
-}
-
-inline Scalar schnorr_response(const Scalar& w, const Scalar& c, const Scalar& r) {
-    // z = r + w * c
-    return r + (w * c);
-}
-
-inline bool schnorr_verify(const G1Point& g, const G1Point& y,
-                           const G1Point& t, const Scalar& c, const Scalar& z)
-{
-    // g^z ?= t + y^c
-    G1Point lhs = mul(g, z);
-    G1Point rhs = add(t, mul(y, c));
+static inline bool schnorr_verify(const G1Point& t, const Scalar& c, const Scalar& z,
+                                  const G1Point& g, const G1Point& y) {
+    // z*g == t + c*y
+    G1Point lhs = G1Point::mul(g, z);
+    G1Point rhs = t.add(G1Point::mul(y, c));
     return lhs == rhs;
 }
 
-inline std::pair<G1Point, Scalar> schnorr_simulate(const G1Point& g,
-                                                    const G1Point& y,
-                                                    const Scalar& c)
-{
-    // choose z, set t = g^z - y^c
-    Scalar z = Scalar::get_random();
-    G1Point t = add(mul(g, z), neg(mul(y, c)));
-    return {t, z};
+/* Chaum–Pedersen for DH triple: u, v=B*g, w=B*u with same B (unknown).
+ * Commit: b -> (v_t = b*g, w_t = b*u)
+ * Verify: z*g == v_t + c*v   AND   z*u == w_t + c*w
+ */
+struct CPT { G1Point vt, wt; };
+
+static inline CPT cp_commit(const Scalar& b, const G1Point& g, const G1Point& u) {
+    return { G1Point::mul(g, b), G1Point::mul(u, b) };
+}
+static inline CPT cp_sim(const Scalar& z, const Scalar& c, const G1Point& g,
+                         const G1Point& u, const G1Point& v, const G1Point& w) {
+    (void)u;
+    // vt = z*g - c*v ; wt = z*u - c*w  (we still pass u to be explicit)
+    G1Point vt = G1Point::mul(g, z).add(G1Point::mul(v, fr_neg(c)));
+    G1Point wt = G1Point::mul(u, z).add(G1Point::mul(w, fr_neg(c)));
+    return { vt, wt };
+}
+static inline bool cp_verify(const CPT& t, const Scalar& c, const Scalar& z,
+                             const G1Point& g, const G1Point& u,
+                             const G1Point& v, const G1Point& w) {
+    G1Point lhs1 = G1Point::mul(g, z);
+    G1Point rhs1 = t.vt.add(G1Point::mul(v, c));
+    G1Point lhs2 = G1Point::mul(u, z);
+    G1Point rhs2 = t.wt.add(G1Point::mul(w, c));
+    return (lhs1 == rhs1) && (lhs2 == rhs2);
 }
 
-// ===== Chaum–Pedersen for DH triple: prove z s.t.
-//     v == z * g  and  w == z * u
-// commit: pick r, vt = r*g, wt = r*u
-// verify: g^z == vt + v^c  and  u^z == wt + w^c
-struct CPCommitOut {
-    CPCommit t;
-    Scalar   r;
-};
-
-inline CPCommitOut cp_commit(const G1Point& g, const G1Point& u) {
-    CPCommitOut out;
-    out.r      = Scalar::get_random();
-    out.t.vt   = mul(g, out.r);
-    out.t.wt   = mul(u, out.r);
-    return out;
+/* Fiat–Shamir challenge over (domain || msg || t00 || t01 || vt10 || wt10 || t11) */
+static Scalar amf_challenge(const std::string& msg,
+                            const G1Point& t00, const G1Point& t01,
+                            const G1Point& vt10, const G1Point& wt10,
+                            const G1Point& t11) {
+    Bytes buf;
+    const char* tag = "AMF:FS:v1";
+    buf.insert(buf.end(), tag, tag + std::strlen(tag));
+    buf.insert(buf.end(), msg.begin(), msg.end());
+    auto put = [&](const G1Point& P){ Bytes b = P.to_bytes(); buf.insert(buf.end(), b.begin(), b.end()); };
+    put(t00); put(t01); put(vt10); put(wt10); put(t11);
+    return Scalar::hash_to_scalar(buf);
 }
 
-inline Scalar cp_response(const Scalar& z_witness, const Scalar& c, const Scalar& r) {
-    // z = r + z_witness * c
-    return r + (z_witness * c);
-}
-
-inline bool cp_verify(const G1Point& g, const G1Point& u,
-                      const G1Point& v, const G1Point& w,
-                      const CPCommit& t, const Scalar& c, const Scalar& z)
-{
-    G1Point lhs1 = mul(g, z);
-    G1Point rhs1 = add(t.vt, mul(v, c));
-    if (!(lhs1 == rhs1)) return false;
-
-    G1Point lhs2 = mul(u, z);
-    G1Point rhs2 = add(t.wt, mul(w, c));
-    return lhs2 == rhs2;
-}
-
-inline std::pair<CPCommit, Scalar> cp_simulate(const G1Point& g, const G1Point& u,
-                                               const G1Point& v, const G1Point& w,
-                                               const Scalar& c)
-{
-    Scalar z = Scalar::get_random();
-    CPCommit t;
-    t.vt = add(mul(g, z), neg(mul(v, c)));
-    t.wt = add(mul(u, z), neg(mul(w, c)));
-    return {t, z};
-}
-
-// ===== Build the AMF proof (FS over AND of two ORs) =====
-// left:  Schnorr(pk_s) OR Schnorr(T)
-// right: CP(pk_j, A, T) OR Schnorr(U)
-
-struct LeftDisjWork {
-    // true branch index and its witness; here we signal which branch is real
-    int     b;        // 0 => Schnorr(pk_s) is real; 1 => Schnorr(T) is real
-    Scalar  w_real;   // witness for the real branch (sk_s or log_g(T))
-    // commits/aux:
-    DisjSchnorrSchnorrCommit commit;
-    // for simulated branch we keep (c_sim, z_sim)
-    Scalar  c_sim;
-    Scalar  z_sim;
-    // for real branch we keep nonce r_real
-    Scalar  r_real;
-};
-
-struct RightDisjWork {
-    int     b;       // 0 => CP is real; 1 => Schnorr(U) is real
-    Scalar  w_real;  // real witness (alpha for CP, or log_g(U) for Schnorr)
-    DisjCPorSchnorrCommit commit;
-    Scalar  c_sim;
-    Scalar  z_sim;
-    Scalar  r_real;  // nonce for real branch (CP.r or Schnorr.r)
-};
-
-inline LeftDisjWork make_left_disj(int b, const Scalar& w_real,
-                                   const Params& params,
-                                   const G1Point& pk_s,
-                                   const G1Point& T)
-{
-    LeftDisjWork L;
-    L.b = b; L.w_real = w_real;
-
-    const int d = 1 - b;
-
-    if (b == 0) {
-        // Real on pk_s, simulate on T
-        auto real = schnorr_commit(params.g);
-        L.commit.t0 = real.t;
-        auto c_sim  = Scalar::get_random();
-        auto sim    = schnorr_simulate(params.g, T, c_sim);
-        L.commit.t1 = sim.first;
-        L.c_sim     = c_sim;
-        L.z_sim     = sim.second;
-        L.r_real    = real.r;
-    } else {
-        // Real on T, simulate on pk_s
-        auto real = schnorr_commit(params.g);
-        L.commit.t1 = real.t;
-        auto c_sim  = Scalar::get_random();
-        auto sim    = schnorr_simulate(params.g, pk_s, c_sim);
-        L.commit.t0 = sim.first;
-        L.c_sim     = c_sim;
-        L.z_sim     = sim.second;
-        L.r_real    = real.r;
-    }
-    return L;
-}
-
-inline DisjSchnorrSchnorrResp finish_left_disj(const LeftDisjWork& L,
-                                               const Scalar& c,
-                                               const G1Point& pk_s,
-                                               const G1Point& T,
-                                               const Params& params)
-{
-    DisjSchnorrSchnorrResp z;
-    const int b = L.b;
-    const int d = 1 - b;
-
-    Scalar c_b  = sub(c, L.c_sim);          // c_b = c - c_sim
-    Scalar z_b  = schnorr_response(L.w_real, c_b, L.r_real);
-
-    if (b == 0) {
-        // c0 corresponds to branch 0 (pk_s)
-        z.c0 = c_b;
-        z.z0 = z_b;
-        z.z1 = L.z_sim;
-    } else {
-        // branch 1 is real -> c0 is simulated share
-        z.c0 = L.c_sim;
-        z.z0 = L.z_sim;
-        z.z1 = z_b;
-    }
-    return z;
-}
-
-inline RightDisjWork make_right_disj(int b, const Scalar& w_real,
-                                     const Params& params,
-                                     const G1Point& pk_j,
-                                     const G1Point& A,
-                                     const G1Point& T,
-                                     const G1Point& U)
-{
-    RightDisjWork R;
-    R.b = b; R.w_real = w_real;
-
-    if (b == 0) {
-        // Real CP(pk_j, A, T), simulate Schnorr(U)
-        auto real = cp_commit(params.g, pk_j);
-        R.commit.cp_t = real.t;
-        auto c_sim    = Scalar::get_random();
-        auto sim      = schnorr_simulate(params.g, U, c_sim);
-        R.commit.t1   = sim.first;
-
-        R.c_sim  = c_sim;
-        R.z_sim  = sim.second;
-        R.r_real = real.r;
-    } else {
-        // Real Schnorr(U), simulate CP
-        auto real = schnorr_commit(params.g);
-        R.commit.t1 = real.t;
-
-        auto c_sim  = Scalar::get_random();
-        auto sim    = cp_simulate(params.g, pk_j, A, T, c_sim);
-        R.commit.cp_t = sim.first;
-
-        R.c_sim  = c_sim;
-        R.z_sim  = sim.second;
-        R.r_real = real.r;
-    }
-    return R;
-}
-
-inline DisjCPorSchnorrResp finish_right_disj(const RightDisjWork& R,
-                                             const Scalar& c,
-                                             const Params& params,
-                                             const G1Point& pk_j,
-                                             const G1Point& A,
-                                             const G1Point& T,
-                                             const G1Point& U)
-{
-    DisjCPorSchnorrResp z;
-    const int b = R.b;
-
-    Scalar c_b  = sub(c, R.c_sim);   // c_b = c - c_sim
-    Scalar z_b;
-
-    if (b == 0) {
-        // real CP
-        z_b  = cp_response(R.w_real, c_b, R.r_real);
-        z.c0 = c_b;     // c0 belongs to CP branch
-        z.z0 = z_b;     // CP response
-        z.z1 = R.z_sim; // Schnorr(U) simulated response
-    } else {
-        // real Schnorr(U)
-        z_b  = schnorr_response(R.w_real, c_b, R.r_real);
-        z.c0 = R.c_sim; // CP simulated share stored as c0
-        z.z0 = R.z_sim; // CP simulated response
-        z.z1 = z_b;     // real Schnorr(U) response
-    }
-    return z;
-}
-
-// Verify both disjunctions given c
-inline bool verify_left_disj(const DisjSchnorrSchnorrCommit& tc,
-                             const DisjSchnorrSchnorrResp&   tr,
-                             const Scalar& c,
-                             const Params& params,
-                             const G1Point& pk_s,
-                             const G1Point& T)
-{
-    Scalar c0 = tr.c0;
-    Scalar c1 = sub(c, c0);
-    bool b0 = schnorr_verify(params.g, pk_s, tc.t0, c0, tr.z0);
-    bool b1 = schnorr_verify(params.g, T,   tc.t1, c1, tr.z1);
-    return b0 && b1;
-}
-
-inline bool verify_right_disj(const DisjCPorSchnorrCommit& tc,
-                              const DisjCPorSchnorrResp&   tr,
-                              const Scalar& c,
-                              const Params& params,
-                              const G1Point& pk_j,
-                              const G1Point& A,
-                              const G1Point& T,
-                              const G1Point& U)
-{
-    Scalar c0 = tr.c0;
-    Scalar c1 = sub(c, c0);
-    bool b0 = cp_verify(params.g, pk_j, A, T, tc.cp_t, c0, tr.z0);
-    bool b1 = schnorr_verify(params.g, U,  tc.t1,     c1, tr.z1);
-    return b0 && b1;
-}
-
-} // namespace (anon)
-
-// ===== Public API =====
+/* =========================== Public API impl ============================ */
 
 Params Params::Default() {
     Params p;
-    // Deterministic generator via hash-to-curve (cofactor-cleared by MCL)
-    p.g = G1Point::hash_and_map_to("AMF:G1:generator");
-    p.domain_tag = "AMF:DMF:BN256";
+    p.g = G1Point::hash_and_map_to("AMF:g1");
     return p;
 }
 
@@ -368,207 +107,352 @@ Signature Frank(const Scalar& sk_s,
                 const G1Point& pk_r,
                 const G1Point& pk_j,
                 const std::string& msg,
-                const Params& params)
-{
-    // Fresh session randomness
+                const Params& params) {
+    const G1Point& g = params.g;
+    Signature S{};
+
+    // Fresh randomness
     Scalar alpha = Scalar::get_random();
     Scalar beta  = Scalar::get_random();
 
-    // Public tuple
-    G1Point A = G1Point::mul(params.g, alpha);
-    G1Point B = G1Point::mul(params.g, beta);
-    G1Point T = G1Point::mul(pk_j,     alpha);  // T = alpha * pk_j
-    G1Point U = G1Point::mul(pk_r,     beta);   // U = beta  * pk_r
+    // Public tuple: binding to R and J
+    S.T = G1Point::mul(pk_j, alpha);
+    S.U = G1Point::mul(pk_r, beta);
+    S.A = G1Point::mul(g,    alpha);
+    S.B = G1Point::mul(g,    beta);
 
-    // Build disjunctions:
-    // left: real = Schnorr(pk_s) with witness sk_s
-    auto Lw  = make_left_disj(/*b=*/0, /*w_real=*/sk_s, params, /*pk_s=*/G1Point::mul(params.g, sk_s), T);
+    /* disj0: OR(Schnorr(pk_s), Schnorr(T)) -- real on pk_s (branch 0), simulate T (branch 1) */
+    Scalar a0  = Scalar::get_random();
+    S.t00 = schnorr_commit(a0, g).t;
+    Scalar cd0 = Scalar::get_random();
+    Scalar zd0 = Scalar::get_random();
+    S.t01 = schnorr_sim(zd0, cd0, g, S.T).t;
 
-    // right: real = CP(pk_j, A, T) with witness alpha
-    auto Rw  = make_right_disj(/*b=*/0, /*w_real=*/alpha, params, pk_j, A, T, U);
+    /* disj1: OR(CP(pk_j,A,T), Schnorr(U)) -- real CP (branch 0), simulate Schnorr(U) (branch 1) */
+    Scalar b0  = Scalar::get_random();
+    CPT t_b1 = cp_commit(b0, g, pk_j);
+    S.vt10 = t_b1.vt; S.wt10 = t_b1.wt;
+    Scalar cd1 = Scalar::get_random();
+    Scalar zd1 = Scalar::get_random();
+    S.t11 = schnorr_sim(zd1, cd1, g, S.U).t;
 
-    // Fiat–Shamir challenge
-    Scalar c = fs_challenge(params.domain_tag, msg,
-                            /*pk_s=*/G1Point::mul(params.g, sk_s),
-                            pk_j, T, U, A, B,
-                            Lw.commit, Rw.commit);
+    // FS challenge
+    Scalar c = amf_challenge(msg, S.t00, S.t01, S.vt10, S.wt10, S.t11);
 
-    // Finish responses
-    DisjSchnorrSchnorrResp Lz = finish_left_disj (Lw, c, /*pk_s=*/G1Point::mul(params.g, sk_s), T, params);
-    DisjCPorSchnorrResp    Rz = finish_right_disj(Rw, c, params, pk_j, A, T, U);
+    // disj0 responses
+    Scalar c_b0 = fr_sub(c, cd0);
+    S.c0 = c_b0;
+    S.z0 = a0 + (sk_s * c_b0);
+    S.z1 = zd0;
 
-    Signature s;
-    s.proof.left_commit  = Lw.commit;
-    s.proof.right_commit = Rw.commit;
-    s.proof.left_resp    = Lz;
-    s.proof.right_resp   = Rz;
-    s.T = T; s.U = U; s.A = A; s.B = B;
-    return s;
-}
+    // disj1 responses
+    Scalar c_b1 = fr_sub(c, cd1);
+    S.c0p = c_b1;
+    S.z0p = b0 + (alpha * c_b1);
+    S.z1p = zd1;
 
-Signature Forge(const G1Point& pk_s,
-                const G1Point& pk_r,
-                const G1Point& pk_j,
-                const std::string& msg,
-                const Params& params)
-{
-    Scalar alpha = Scalar::get_random();
-    Scalar beta  = Scalar::get_random();
-    Scalar gamma = Scalar::get_random();
-    Scalar delta = Scalar::get_random();
-
-    G1Point A = G1Point::mul(params.g, alpha);
-    G1Point B = G1Point::mul(params.g, beta);
-    G1Point T = G1Point::mul(params.g, gamma); // not linked to pk_j -> judge check fails
-    G1Point U = G1Point::mul(params.g, delta); // not linked to pk_r -> receiver check fails
-
-    // left: real = Schnorr(T) with witness gamma
-    auto Lw = make_left_disj(/*b=*/1, /*w_real=*/gamma, params, pk_s, T);
-
-    // right: real = Schnorr(U) with witness delta
-    auto Rw = make_right_disj(/*b=*/1, /*w_real=*/delta, params, pk_j, A, T, U);
-
-    Scalar c = fs_challenge(params.domain_tag, msg, pk_s, pk_j, T, U, A, B,
-                            Lw.commit, Rw.commit);
-
-    auto Lz = finish_left_disj (Lw, c, pk_s, T, params);
-    auto Rz = finish_right_disj(Rw, c, params, pk_j, A, T, U);
-
-    Signature s;
-    s.proof.left_commit  = Lw.commit;
-    s.proof.right_commit = Rw.commit;
-    s.proof.left_resp    = Lz;
-    s.proof.right_resp   = Rz;
-    s.T = T; s.U = U; s.A = A; s.B = B;
-    return s;
-}
-
-Signature RForge(const G1Point& pk_s,
-                 const Scalar&  sk_r,
-                 const G1Point& pk_j,
-                 const std::string& msg,
-                 const Params& params)
-{
-    // derive pk_r from sk_r
-    G1Point pk_r = G1Point::mul(params.g, sk_r);
-
-    // receiver knows sk_r
-    Scalar alpha = Scalar::get_random();
-    Scalar beta  = Scalar::get_random();
-    Scalar gamma = Scalar::get_random();
-
-    G1Point A = G1Point::mul(params.g, alpha);
-    G1Point B = G1Point::mul(params.g, beta);
-    G1Point T = G1Point::mul(params.g, gamma);        // breaks judge check
-    G1Point U = G1Point::mul(pk_r, beta);             // passes receiver check
-
-    // left: real = Schnorr(T) with witness gamma (so FS proof verifies)
-    auto Lw = make_left_disj(/*b=*/1, /*w_real=*/gamma, params, pk_s, T);
-
-    // right: real = Schnorr(U) with witness (beta * sk_r)
-    Scalar wU = beta * sk_r;
-    auto Rw = make_right_disj(/*b=*/1, /*w_real=*/wU, params, pk_j, A, T, U);
-
-    Scalar c = fs_challenge(params.domain_tag, msg, pk_s, pk_j, T, U, A, B,
-                            Lw.commit, Rw.commit);
-
-    auto Lz = finish_left_disj (Lw, c, pk_s, T, params);
-    auto Rz = finish_right_disj(Rw, c, params, pk_j, A, T, U);
-
-    Signature s;
-    s.proof.left_commit  = Lw.commit;
-    s.proof.right_commit = Rw.commit;
-    s.proof.left_resp    = Lz;
-    s.proof.right_resp   = Rz;
-    s.T = T; s.U = U; s.A = A; s.B = B;
-    return s;
-}
-
-Signature JForge(const G1Point& pk_s,
-                 const G1Point& pk_r,
-                 const Scalar&  sk_j,
-                 const std::string& msg,
-                 const Params& params)
-{
-    // judge knows sk_j
-    Scalar alpha = Scalar::get_random();
-    Scalar beta  = Scalar::get_random();
-
-    G1Point A = G1Point::mul(params.g, alpha);
-    G1Point B = G1Point::mul(params.g, beta);
-    G1Point T = G1Point::mul(G1Point::mul(params.g, sk_j), alpha);  // T = alpha * pk_j
-    G1Point U = G1Point::mul(pk_r, beta);
-
-    // left: real = Schnorr(T) with witness alpha*sk_j
-    Scalar wT = alpha * sk_j;
-    auto Lw = make_left_disj(/*b=*/1, /*w_real=*/wT, params, pk_s, T);
-
-    // right: real = CP(pk_j, A, T) with witness alpha
-    auto Rw = make_right_disj(/*b=*/0, /*w_real=*/alpha, params, G1Point::mul(params.g, sk_j), A, T, U);
-
-    Scalar c = fs_challenge(params.domain_tag, msg, pk_s, G1Point::mul(params.g, sk_j),
-                            T, U, A, B, Lw.commit, Rw.commit);
-
-    auto Lz = finish_left_disj (Lw, c, pk_s, T, params);
-    auto Rz = finish_right_disj(Rw, c, params, G1Point::mul(params.g, sk_j), A, T, U);
-
-    Signature s;
-    s.proof.left_commit  = Lw.commit;
-    s.proof.right_commit = Rw.commit;
-    s.proof.left_resp    = Lz;
-    s.proof.right_resp   = Rz;
-    s.T = T; s.U = U; s.A = A; s.B = B;
-    return s;
+    return S;
 }
 
 bool Verify(const G1Point& pk_s,
             const Scalar&  sk_r,
             const G1Point& pk_j,
             const std::string& msg,
-            const Signature& sig,
-            const Params& params)
-{
-    // Designated check for receiver: U == sk_r * B
-    if (!(sig.U == G1Point::mul(sig.B, sk_r))) return false;
+            const Signature& S,
+            const Params& params) {
+    const G1Point& g = params.g;
 
-    // Fiat–Shamir challenge
-    Scalar c = fs_challenge(params.domain_tag, msg,
-                            pk_s, pk_j, sig.T, sig.U, sig.A, sig.B,
-                            sig.proof.left_commit, sig.proof.right_commit);
+    // Receiver binding
+    if (!(S.U == G1Point::mul(S.B, sk_r))) return false;
 
-    // Verify both disjunctions
-    bool L = verify_left_disj(sig.proof.left_commit,  sig.proof.left_resp,
-                              c, params, pk_s, sig.T);
-    if (!L) return false;
+    // FS challenge
+    Scalar c = amf_challenge(msg, S.t00, S.t01, S.vt10, S.wt10, S.t11);
 
-    bool R = verify_right_disj(sig.proof.right_commit, sig.proof.right_resp,
-                               c, params, pk_j, sig.A, sig.T, sig.U);
-    return R;
+    // disj0: branch-0 Schnorr(pk_s), branch-1 Schnorr(T)
+    Scalar c1 = fr_sub(c, S.c0);
+    if (!(schnorr_verify(S.t00, S.c0, S.z0, g, pk_s) &&
+          schnorr_verify(S.t01, c1,   S.z1, g, S.T))) {
+        return false;
+    }
+
+    // disj1: branch-0 CP(pk_j,A,T), branch-1 Schnorr(U)
+    Scalar c1p = fr_sub(c, S.c0p);
+    CPT t{ S.vt10, S.wt10 };
+    if (!(cp_verify(t, S.c0p, S.z0p, g, pk_j, S.A, S.T) &&
+          schnorr_verify(S.t11, c1p,   S.z1p, g, S.U))) {
+        return false;
+    }
+    return true;
 }
 
 bool Judge(const G1Point& pk_s,
            const G1Point& pk_r,
            const Scalar&  sk_j,
            const std::string& msg,
-           const Signature& sig,
-           const Params& params)
-{
-    G1Point pk_j = G1Point::mul(params.g, sk_j);
+           const Signature& S,
+           const Params& params) {
+    (void)pk_r; // not needed for the math; keep for API symmetry
+    const G1Point& g = params.g;
 
-    // Designated check for judge: T == sk_j * A
-    if (!(sig.T == G1Point::mul(sig.A, sk_j))) return false;
+    // Judge binding
+    if (!(S.T == G1Point::mul(S.A, sk_j))) return false;
 
-    Scalar c = fs_challenge(params.domain_tag, msg,
-                            pk_s, pk_j, sig.T, sig.U, sig.A, sig.B,
-                            sig.proof.left_commit, sig.proof.right_commit);
+    Scalar c = amf_challenge(msg, S.t00, S.t01, S.vt10, S.wt10, S.t11);
 
-    bool L = verify_left_disj(sig.proof.left_commit,  sig.proof.left_resp,
-                              c, params, pk_s, sig.T);
-    if (!L) return false;
+    // disj0
+    Scalar c1 = fr_sub(c, S.c0);
+    if (!(schnorr_verify(S.t00, S.c0, S.z0, g, pk_s) &&
+          schnorr_verify(S.t01, c1,   S.z1, g, S.T))) {
+        return false;
+    }
 
-    bool R = verify_right_disj(sig.proof.right_commit, sig.proof.right_resp,
-                               c, params, pk_j, sig.A, sig.T, sig.U);
-    return R;
+    // disj1 (use pk_j = sk_j * g)
+    G1Point pk_j = G1Point::mul(g, sk_j);
+    Scalar c1p = fr_sub(c, S.c0p);
+    CPT t{ S.vt10, S.wt10 };
+    if (!(cp_verify(t, S.c0p, S.z0p, g, pk_j, S.A, S.T) &&
+          schnorr_verify(S.t11, c1p,   S.z1p, g, S.U))) {
+        return false;
+    }
+    return true;
+}
+
+/* ------------------------------ Forgeries ------------------------------ */
+/* These construct signatures with different “real” branches to match tests.  */
+
+/** Public Forge: break both bindings, keep proofs valid.
+ *  - Set T = gamma*g, U = delta*g (no relation to pk_r, pk_j).
+ *  - disj0 real branch: Schnorr(T) (branch-1) with witness gamma.
+ *  - disj1 real branch: Schnorr(U) (branch-1) with witness delta.
+ */
+Signature Forge(const G1Point& pk_s,
+                const G1Point& pk_r,
+                const G1Point& pk_j,
+                const std::string& msg,
+                const Params& params) {
+    (void)pk_s; (void)pk_r; (void)pk_j;
+    const G1Point& g = params.g;
+    Signature S{};
+
+    Scalar alpha = Scalar::get_random();
+    Scalar beta  = Scalar::get_random();
+    Scalar gamma = Scalar::get_random();
+    Scalar delta = Scalar::get_random();
+
+    S.T = G1Point::mul(g, gamma);
+    S.U = G1Point::mul(g, delta);
+    S.A = G1Point::mul(g, alpha);
+    S.B = G1Point::mul(g, beta);
+
+    // disj0: simulate branch-0 (pk_s), real branch-1 (T with witness gamma)
+    Scalar cd0 = Scalar::get_random(), zd0 = Scalar::get_random();
+    S.t00 = schnorr_sim(zd0, cd0, g, G1Point::mul(g, Scalar::get_random())).t; // y unused; any y ok since simulated
+    // Use pk_s as y for simulation to be consistent:
+    S.t00 = schnorr_sim(zd0, cd0, g, pk_s).t;
+
+    Scalar a1 = Scalar::get_random();
+    S.t01 = schnorr_commit(a1, g).t;
+
+    // disj1: simulate branch-0 (CP), real branch-1 (Schnorr(U) with witness delta)
+    Scalar cd1 = Scalar::get_random(), zd1 = Scalar::get_random();
+    // CP simulate with v=A, w=T and u=pk_j:
+    CPT tcp = cp_sim(zd1, cd1, g, pk_j, S.A, S.T);
+    S.vt10 = tcp.vt; S.wt10 = tcp.wt;
+
+    Scalar aU = Scalar::get_random();
+    S.t11 = schnorr_commit(aU, g).t;
+
+    // FS challenge
+    Scalar c = amf_challenge(msg, S.t00, S.t01, S.vt10, S.wt10, S.t11);
+
+    // disj0 responses (store c0 for branch-0; real is branch-1)
+    S.c0 = cd0;
+    Scalar c1 = fr_sub(c, S.c0);
+    S.z0 = zd0;                        // simulated
+    S.z1 = a1 + (gamma * c1);          // real
+
+    // disj1 responses (store c0p for branch-0; real is branch-1)
+    S.c0p = cd1;
+    Scalar c1p = fr_sub(c, S.c0p);
+    S.z0p = zd1;                       // simulated CP
+    S.z1p = aU + (delta * c1p);        // real Schnorr(U)
+
+    return S;
+}
+
+/** RForge: Verify passes, Judge fails.
+ *  - Set U = beta*pk_r (so U == sk_r*B), T = gamma*g (unrelated to A).
+ *  - disj0 real branch: Schnorr(T) (branch-1) with witness gamma.
+ *  - disj1 real branch: Schnorr(U) (branch-1) with witness beta*sk_r (exists).
+ */
+Signature RForge(const G1Point& pk_s,
+                 const Scalar&  sk_r,
+                 const G1Point& pk_j,
+                 const std::string& msg,
+                 const Params& params) {
+    (void)pk_s; (void)pk_j;
+    const G1Point& g = params.g;
+    Signature S{};
+
+    Scalar alpha = Scalar::get_random();
+    Scalar beta  = Scalar::get_random();
+    Scalar gamma = Scalar::get_random();
+
+    S.T = G1Point::mul(g, gamma);
+    S.U = G1Point::mul(G1Point::mul(g, sk_r), beta);  // = (beta*sk_r)*g = beta*pk_r
+    S.A = G1Point::mul(g, alpha);
+    S.B = G1Point::mul(g, beta);
+
+    // disj0: simulate branch-0 (pk_s), real branch-1 (T)
+    Scalar cd0 = Scalar::get_random(), zd0 = Scalar::get_random();
+    S.t00 = schnorr_sim(zd0, cd0, g, pk_s).t;
+
+    Scalar a1 = Scalar::get_random();
+    S.t01 = schnorr_commit(a1, g).t;
+
+    // disj1: simulate CP (branch-0), real Schnorr(U) (branch-1)
+    Scalar cd1 = Scalar::get_random(), zd1 = Scalar::get_random();
+    CPT tcp = cp_sim(zd1, cd1, g, pk_j, S.A, S.T);
+    S.vt10 = tcp.vt; S.wt10 = tcp.wt;
+
+    Scalar aU = Scalar::get_random();
+    S.t11 = schnorr_commit(aU, g).t;
+
+    Scalar c = amf_challenge(msg, S.t00, S.t01, S.vt10, S.wt10, S.t11);
+
+    S.c0 = cd0;
+    Scalar c1 = fr_sub(c, S.c0);
+    S.z0 = zd0;
+    S.z1 = a1 + (gamma * c1);
+
+    S.c0p = cd1;
+    Scalar c1p = fr_sub(c, S.c0p);
+    Scalar wU = beta * sk_r; // witness for U relative to g
+    S.z0p = zd1;
+    S.z1p = aU + (wU * c1p);
+
+    return S;
+}
+
+/** JForge: both Verify and Judge pass.
+ *  - Set T = alpha*pk_j, U = beta*pk_r (both bindings hold).
+ *  - disj0 real branch: Schnorr(T) (branch-1) with witness alpha*sk_j.
+ *  - disj1 real branch: CP (branch-0) with witness alpha.
+ */
+Signature JForge(const G1Point& pk_s,
+                 const G1Point& pk_r,
+                 const Scalar&  sk_j,
+                 const std::string& msg,
+                 const Params& params) {
+    (void)pk_s; (void)pk_r;
+    const G1Point& g = params.g;
+    Signature S{};
+
+    Scalar alpha = Scalar::get_random();
+    Scalar beta  = Scalar::get_random();
+
+    S.T = G1Point::mul(G1Point::mul(g, sk_j), alpha); // = (alpha*sk_j)*g = alpha*pk_j
+    S.U = G1Point::mul(pk_r, beta);                   // = beta*pk_r
+    S.A = G1Point::mul(g, alpha);
+    S.B = G1Point::mul(g, beta);
+
+    // disj0: simulate branch-0 (pk_s), real branch-1 (Schnorr(T) with witness alpha*sk_j)
+    Scalar cd0 = Scalar::get_random(), zd0 = Scalar::get_random();
+    S.t00 = schnorr_sim(zd0, cd0, g, pk_s).t;
+
+    Scalar aT = Scalar::get_random();
+    S.t01 = schnorr_commit(aT, g).t;
+
+    // disj1: real CP (branch-0) with witness alpha, simulate Schnorr(U) (branch-1)
+    Scalar b0 = Scalar::get_random();
+    G1Point pk_j = G1Point::mul(g, sk_j);
+    CPT t_b1 = cp_commit(b0, g, pk_j);
+    S.vt10 = t_b1.vt; S.wt10 = t_b1.wt;
+
+    Scalar cd1 = Scalar::get_random(), zd1 = Scalar::get_random();
+    S.t11 = schnorr_sim(zd1, cd1, g, S.U).t;
+
+    // FS challenge
+    Scalar c = amf_challenge(msg, S.t00, S.t01, S.vt10, S.wt10, S.t11);
+
+    // disj0 responses
+    S.c0 = cd0;                   // branch-0 simulated
+    Scalar c1 = fr_sub(c, S.c0);  // branch-1 real
+    Scalar wT = alpha * sk_j;
+    S.z0 = zd0;
+    S.z1 = aT + (wT * c1);
+
+    // disj1 responses
+    Scalar c_b1 = fr_sub(c, cd1); // branch-0 real CP (c0p)
+    S.c0p = c_b1;
+    S.z0p = b0 + (alpha * c_b1);  // CP response
+    S.z1p = zd1;                  // Schnorr(U) simulated
+
+    return S;
+}
+
+/* ============================ Serialization ============================ */
+/*
+ * Versioned, fixed-length concatenation:
+ *   magic "AMF1" (4 bytes big-endian)
+ *   T,U,A,B                 (4 × G1)
+ *   t00,t01                 (2 × G1)
+ *   c0,z0,z1                (3 × Fr)
+ *   vt10,wt10,t11           (3 × G1)
+ *   c0p,z0p,z1p             (3 × Fr)
+ */
+
+static constexpr uint32_t AMF_MAGIC = 0x414D4631u; // "AMF1"
+
+Bytes Signature::to_bytes() const {
+    std::vector<uint8_t> out;
+    out.reserve(4 + 9 * G1_SERIALIZED_SIZE + 6 * FR_SERIALIZED_SIZE);
+
+    be32_write(out, AMF_MAGIC);
+
+    auto put_g1 = [&](const G1Point& P){ append_bytes(out, P.to_bytes()); };
+    auto put_fr = [&](const Scalar& s){ append_bytes(out, s.to_bytes()); };
+
+    put_g1(T); put_g1(U); put_g1(A); put_g1(B);
+    put_g1(t00); put_g1(t01);
+    put_fr(c0); put_fr(z0); put_fr(z1);
+    put_g1(vt10); put_g1(wt10); put_g1(t11);
+    put_fr(c0p); put_fr(z0p); put_fr(z1p);
+
+    return out;
+}
+
+Signature Signature::from_bytes(const Bytes& in) {
+    Signature S{};
+    const uint8_t* p   = in.data();
+    const uint8_t* end = in.data() + in.size();
+
+    auto need = [&](size_t n){ return size_t(end - p) >= n; };
+    auto rd_g1 = [&](G1Point& P)->bool {
+        if (!need(G1_SERIALIZED_SIZE)) return false;
+        P = G1Point::from_bytes(Bytes(p, p + G1_SERIALIZED_SIZE));
+        p += G1_SERIALIZED_SIZE; return true;
+    };
+    auto rd_fr = [&](Scalar& s)->bool {
+        if (!need(FR_SERIALIZED_SIZE)) return false;
+        s = Scalar::from_bytes(Bytes(p, p + FR_SERIALIZED_SIZE));
+        p += FR_SERIALIZED_SIZE; return true;
+    };
+
+    if (!need(4)) throw std::runtime_error("amf::Signature: truncated");
+    uint32_t magic = be32(p); p += 4;
+    if (magic != AMF_MAGIC) throw std::runtime_error("amf::Signature: bad magic");
+
+    if (!rd_g1(S.T) || !rd_g1(S.U) || !rd_g1(S.A) || !rd_g1(S.B)) goto err;
+    if (!rd_g1(S.t00) || !rd_g1(S.t01)) goto err;
+    if (!rd_fr(S.c0)  || !rd_fr(S.z0)  || !rd_fr(S.z1)) goto err;
+    if (!rd_g1(S.vt10) || !rd_g1(S.wt10) || !rd_g1(S.t11)) goto err;
+    if (!rd_fr(S.c0p)  || !rd_fr(S.z0p)  || !rd_fr(S.z1p)) goto err;
+
+    if (p != end) throw std::runtime_error("amf::Signature: extra bytes");
+    return S;
+err:
+    throw std::runtime_error("amf::Signature: truncated");
 }
 
 } // namespace amf
