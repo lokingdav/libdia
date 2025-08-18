@@ -18,6 +18,7 @@ set(TEST_SRC_FILES
     test_amf.cpp
     test_bbs.cpp
     test_dh.cpp
+    test_dia_c.cpp
 )
 add_executable(run_dia_tests ${TEST_SRC_FILES})
 target_include_directories(run_dia_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
@@ -25,4 +26,4 @@ target_include_directories(run_dia_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 # -----------------------------------------------------------------------------
 # Link Libraries
 # -----------------------------------------------------------------------------
-target_link_libraries(run_dia_tests PRIVATE dia Catch2::Catch2WithMain mcl)
+target_link_libraries(run_dia_tests PRIVATE dia dia_c_interface Catch2::Catch2WithMain mcl)
