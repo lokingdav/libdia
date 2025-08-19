@@ -26,11 +26,28 @@ static inline std::vector<uint32_t> to_u32(const std::vector<size_t>& v) {
 TEST_CASE("C ABI: VOPRF / AMF / BBS smoke tests", "[dia_c]") {
     init_dia();
 
-    SECTION("VOPRF end-to-end") {
+    SECTION("Diffie-Hellman end-to-end") {
+        unsigned char a[DIA_FR_LEN], A[DIA_G1_LEN];
+        REQUIRE(dia_dh_keygen(a, A) == DIA_OK);
+
+        unsigned char b[DIA_FR_LEN], B[DIA_G1_LEN];
+        REQUIRE(dia_dh_keygen(b, B) == DIA_OK);
+
+        unsigned char sec1[DIA_G1_LEN], sec2[DIA_G1_LEN];
+        REQUIRE(dia_dh_compute_secret(a, B, sec1) == DIA_OK);
+        REQUIRE(dia_dh_compute_secret(b, A, sec2) == DIA_OK);
+
+        REQUIRE(std::memcmp(sec1, sec2, DIA_G1_LEN) == 0);
+    }
+
+
+    SECTION("VOPRF end-to-end (deterministic output across re-blinds)") {
         unsigned char sk[DIA_FR_LEN], pk[DIA_G2_LEN];
         REQUIRE(dia_voprf_keygen(sk, pk) == DIA_OK);
 
         const std::string in = "hello voprf";
+
+        // --- First run ---
         unsigned char blinded[DIA_G1_LEN], blind[DIA_FR_LEN];
         REQUIRE(dia_voprf_blind(reinterpret_cast<const unsigned char*>(in.data()), in.size(),
                                 blinded, blind) == DIA_OK);
@@ -41,42 +58,70 @@ TEST_CASE("C ABI: VOPRF / AMF / BBS smoke tests", "[dia_c]") {
         unsigned char Y[DIA_G1_LEN];
         REQUIRE(dia_voprf_unblind(element, blind, Y) == DIA_OK);
 
-        // Single verify
+        // Verify (single)
         int v_ok = 0;
         REQUIRE(dia_voprf_verify(reinterpret_cast<const unsigned char*>(in.data()), in.size(),
-                                 Y, pk, &v_ok) == DIA_OK);
+                                Y, pk, &v_ok) == DIA_OK);
         REQUIRE(v_ok == 1);
 
-        // Batch verify (two items)
+        // --- Second run on the SAME input (fresh blind) ---
+        unsigned char blinded2[DIA_G1_LEN], blind2[DIA_FR_LEN];
+        REQUIRE(dia_voprf_blind(reinterpret_cast<const unsigned char*>(in.data()), in.size(),
+                                blinded2, blind2) == DIA_OK);
+
+        unsigned char element2[DIA_G1_LEN];
+        REQUIRE(dia_voprf_evaluate(blinded2, sk, element2) == DIA_OK);
+
+        unsigned char Y2[DIA_G1_LEN];
+        REQUIRE(dia_voprf_unblind(element2, blind2, Y2) == DIA_OK);
+
+        // Blinding randomness should differ (overwhelming probability)
+        REQUIRE(std::memcmp(blinded, blinded2, DIA_G1_LEN) != 0);
+        REQUIRE(std::memcmp(element, element2, DIA_G1_LEN) != 0);
+
+        // Determinism: final OPRF output must be identical for same input+key
+        REQUIRE(std::memcmp(Y, Y2, DIA_G1_LEN) == 0);
+
+        // Different input should yield a different Y (overwhelming probability)
+        const std::string in_other = "hello voprf!";
+        unsigned char b3[DIA_G1_LEN], r3[DIA_FR_LEN], e3[DIA_G1_LEN], Y3[DIA_G1_LEN];
+        REQUIRE(dia_voprf_blind(reinterpret_cast<const unsigned char*>(in_other.data()), in_other.size(), b3, r3) == DIA_OK);
+        REQUIRE(dia_voprf_evaluate(b3, sk, e3) == DIA_OK);
+        REQUIRE(dia_voprf_unblind(e3, r3, Y3) == DIA_OK);
+        REQUIRE(std::memcmp(Y, Y3, DIA_G1_LEN) != 0);
+
+
+        // --- Batch verify (two items) ---
         std::vector<std::string> ins = {"alpha", "beta"};
         auto ptrs = to_ptrs(ins);
         auto lens = to_lens(ins);
 
         // compute Ys for both
         unsigned char blinded1[DIA_G1_LEN], blind1[DIA_FR_LEN];
-        unsigned char blinded2[DIA_G1_LEN], blind2[DIA_FR_LEN];
+        unsigned char blindedB[DIA_G1_LEN], blindB[DIA_FR_LEN];
         REQUIRE(dia_voprf_blind(reinterpret_cast<const unsigned char*>(ins[0].data()), ins[0].size(), blinded1, blind1) == DIA_OK);
-        REQUIRE(dia_voprf_blind(reinterpret_cast<const unsigned char*>(ins[1].data()), ins[1].size(), blinded2, blind2) == DIA_OK);
+        REQUIRE(dia_voprf_blind(reinterpret_cast<const unsigned char*>(ins[1].data()), ins[1].size(), blindedB, blindB) == DIA_OK);
 
-        unsigned char elem1[DIA_G1_LEN], elem2[DIA_G1_LEN];
+        unsigned char elem1[DIA_G1_LEN], elemB[DIA_G1_LEN];
         REQUIRE(dia_voprf_evaluate(blinded1, sk, elem1) == DIA_OK);
-        REQUIRE(dia_voprf_evaluate(blinded2, sk, elem2) == DIA_OK);
+        REQUIRE(dia_voprf_evaluate(blindedB, sk, elemB) == DIA_OK);
 
-        unsigned char Y1[DIA_G1_LEN], Y2[DIA_G1_LEN];
+        unsigned char Y1[DIA_G1_LEN], YB[DIA_G1_LEN];
         REQUIRE(dia_voprf_unblind(elem1, blind1, Y1) == DIA_OK);
-        REQUIRE(dia_voprf_unblind(elem2, blind2, Y2) == DIA_OK);
+        REQUIRE(dia_voprf_unblind(elemB, blindB, YB) == DIA_OK);
 
-        // Concatenate Y1||Y2 for the C API
+        // Concatenate Y1||YB for the C API
         std::vector<unsigned char> Y_concat(DIA_G1_LEN * 2);
         std::memcpy(Y_concat.data(), Y1, DIA_G1_LEN);
-        std::memcpy(Y_concat.data() + DIA_G1_LEN, Y2, DIA_G1_LEN);
+        std::memcpy(Y_concat.data() + DIA_G1_LEN, YB, DIA_G1_LEN);
 
         int vb_ok = 0;
         REQUIRE(dia_voprf_verify_batch(reinterpret_cast<const unsigned char* const*>(ptrs.data()),
-                                       lens.data(), ins.size(),
-                                       Y_concat.data(), pk, &vb_ok) == DIA_OK);
+                                    lens.data(), ins.size(),
+                                    Y_concat.data(), pk, &vb_ok) == DIA_OK);
         REQUIRE(vb_ok == 1);
     }
+
 
     SECTION("AMF: Frank -> Verify & Judge; plus negative cases") {
         // Keygen for three parties

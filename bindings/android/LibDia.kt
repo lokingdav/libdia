@@ -3,6 +3,10 @@ package io.github.lokingdav.libdia
 object LibDia {
     init { System.loadLibrary("dia_jni") } // name of your .so
 
+    // DH
+    external fun dhKeygen(): Array<ByteArray> // [sk(Fr), pk(G1)]
+    external fun dhComputeSecret(sk: ByteArray, peerPk: ByteArray): ByteArray // secret (G1)
+
     // VOPRF
     external fun voprfKeygen(): Array<ByteArray>             // [sk, pk]
     external fun voprfBlind(input: ByteArray): Array<ByteArray> // [blinded, blind]

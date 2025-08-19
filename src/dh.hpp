@@ -14,6 +14,6 @@ namespace dh {
 
     KeyPair keygen();
 
-    ecgroup::G1Point compute_secret(const ecgroup::Scalar &a, const ecgroup::G1Point &A);
+    ecgroup::G1Point compute_secret(const ecgroup::Scalar &a, const ecgroup::G1Point &B);
 }
 #endif // DIA_DH_HPP

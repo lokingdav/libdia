@@ -13,8 +13,8 @@ namespace dh {
         return kp;
     }
 
-    G1Point compute_secret(const Scalar &a, const G1Point &A) {
-        return G1Point::mul(A, a);
+    G1Point compute_secret(const Scalar &a, const G1Point &B) {
+        return G1Point::mul(B, a);
     }
 
 } // namespace dh

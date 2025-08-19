@@ -36,6 +36,18 @@ void init_dia(void);
 void free_byte_buffer(unsigned char* buf);
 
 /*==============================================================================
+ * Diffie-hellman (PK in G1)
+ *============================================================================*/
+/** Generate server key pair: sk (Fr), pk (G1). */
+int dia_dh_keygen(/*out*/ unsigned char sk[DIA_FR_LEN],
+                     /*out*/ unsigned char pk[DIA_G1_LEN]);
+
+/** Server: evaluate on a blinded element using sk. */
+int dia_dh_compute_secret(const unsigned char a[DIA_FR_LEN],
+                       const unsigned char B[DIA_G1_LEN],
+                       /*out*/ unsigned char out_element[DIA_G1_LEN]);
+
+/*==============================================================================
  * VOPRF (server PK in G2, outputs in G1)
  *  - Inputs are raw byte strings; hashing is done internally.
  *============================================================================*/

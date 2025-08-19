@@ -5,6 +5,7 @@
 #include "voprf.hpp"
 #include "bbs.hpp"
 #include "amf.hpp"
+#include "dh.hpp"
 
 #include <vector>
 #include <string>
@@ -29,6 +30,37 @@ static void copy_to_c_buf(const Bytes& vec, unsigned char** buf_out, size_t* len
 
 void init_dia() { ecgroup::init_pairing(); }
 void free_byte_buffer(unsigned char* buf) { delete[] buf; }
+
+/* ============================== DH =============================== */
+
+int dia_dh_keygen(unsigned char sk[DIA_FR_LEN],
+                     unsigned char pk[DIA_G1_LEN]) {
+    try {
+        auto kp = dh::keygen();
+        {
+            Bytes b = kp.sk.to_bytes();
+            std::memcpy(sk, b.data(), b.size());
+        }
+        {
+            Bytes b = kp.pk.to_bytes();
+            std::memcpy(pk, b.data(), b.size());
+        }
+        return DIA_OK;
+    } catch (...) { return DIA_ERR; }
+}
+
+int dia_dh_compute_secret(const unsigned char a[DIA_FR_LEN],
+                       const unsigned char B[DIA_G1_LEN],
+                       /*out*/ unsigned char out_element[DIA_G1_LEN]) {
+    try {
+        G1Point point = G1Point::from_bytes(Bytes(B, B + DIA_G1_LEN));
+        Scalar  s = Scalar::from_bytes(Bytes(a, a + DIA_FR_LEN));
+        G1Point E = G1Point::mul(point, s);
+        Bytes   b = E.to_bytes();
+        std::memcpy(out_element, b.data(), b.size());
+        return DIA_OK;
+    } catch (...) { return DIA_ERR; }
+}
 
 /* ================================ VOPRF ================================= */
 

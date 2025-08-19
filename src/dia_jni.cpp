@@ -118,6 +118,34 @@ static std::vector<uint32_t> toU32(JNIEnv* env, jintArray a) {
     return out;
 }
 
+/* ================================== DH ==================================== */
+
+static jobjectArray native_dhKeygen(JNIEnv* env, jclass) {
+    unsigned char sk[DIA_FR_LEN], pk[DIA_G1_LEN];
+    if (!rcIsOk(env, "dia_dh_keygen", dia_dh_keygen(sk, pk))) return nullptr;
+
+    jobjectArray out = make2DByteArray(env, 2);
+    set2DByteArrayElem(env, out, 0, sk, DIA_FR_LEN);
+    set2DByteArrayElem(env, out, 1, pk, DIA_G1_LEN);
+    return out;
+}
+
+static jbyteArray native_dhComputeSecret(JNIEnv* env, jclass,
+                                         jbyteArray jsk, jbyteArray jpk) {
+    if (!checkLen(env, jsk, DIA_FR_LEN, "sk")) return nullptr;
+    if (!checkLen(env, jpk, DIA_G1_LEN, "peerPk")) return nullptr;
+
+    auto sk = getBytes(env, jsk);
+    auto pk = getBytes(env, jpk);
+
+    unsigned char sec[DIA_G1_LEN];
+    if (!rcIsOk(env, "dia_dh_compute_secret",
+                dia_dh_compute_secret(sk.data(), pk.data(), sec))) {
+        return nullptr;
+    }
+    return makeByteArray(env, sec, DIA_G1_LEN);
+}
+
 /* ================================ VOPRF ================================= */
 
 static jobjectArray native_voprfKeygen(JNIEnv* env, jclass) {
@@ -427,6 +455,10 @@ static jboolean native_bbsVerifyProof(JNIEnv* env, jclass,
 /* ============================ Registration =============================== */
 
 static JNINativeMethod gMethods[] = {
+    // DH
+    { "dhKeygen",         "()[[B",                          (void*)native_dhKeygen },
+    { "dhComputeSecret",  "([B[B)[B",                       (void*)native_dhComputeSecret },
+
     // VOPRF
     { "voprfKeygen",      "()[[B",                          (void*)native_voprfKeygen },
     { "voprfBlind",       "([B)[[B",                        (void*)native_voprfBlind },
