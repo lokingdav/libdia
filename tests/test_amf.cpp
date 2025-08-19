@@ -4,6 +4,8 @@
 #include "ecgroup.hpp"
 #include "amf.hpp"
 
+#include <stdexcept> // for std::runtime_error
+
 TEST_CASE("Asymmetric Message Franking (AMF)", "[amf]") {
     // Initialize underlying pairing library once.
     ecgroup::init_pairing();
@@ -93,5 +95,35 @@ TEST_CASE("Asymmetric Message Franking (AMF)", "[amf]") {
         // Not both A and B should be equal.
         bool bothEqual = (s1.A == s2.A) && (s1.B == s2.B);
         REQUIRE_FALSE(bothEqual);
+    }
+
+    /* ---------------------- Serialization tests ---------------------- */
+
+    SECTION("AMF signature serialization roundtrip") {
+        amf::Signature sig = amf::Frank(S.sk, R.pk, J.pk, msg, params);
+
+        ecgroup::Bytes ser = sig.to_bytes();
+        REQUIRE(!ser.empty());
+
+        amf::Signature dec = amf::Signature::from_bytes(ser);
+
+        // Decoded signature verifies and judges for the same message/keys
+        REQUIRE(amf::Verify(S.pk, R.sk, J.pk, msg, dec, params));
+        REQUIRE(amf::Judge (S.pk, R.pk, J.sk, msg, dec, params));
+
+        // Trailing byte -> should throw
+        auto bad = ser;
+        bad.push_back(0x00);
+        REQUIRE_THROWS_AS(amf::Signature::from_bytes(bad), std::runtime_error);
+
+        // Truncation -> should throw
+        auto trunc = ser;
+        trunc.pop_back();
+        REQUIRE_THROWS_AS(amf::Signature::from_bytes(trunc), std::runtime_error);
+
+        // Bad magic -> should throw
+        auto badmagic = ser;
+        badmagic[0] ^= 0xFF;
+        REQUIRE_THROWS_AS(amf::Signature::from_bytes(badmagic), std::runtime_error);
     }
 }

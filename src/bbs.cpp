@@ -111,7 +111,6 @@ bool verify(const Params& params,
 
 // Build B_pub = g1 * Π_{i in disclosed} h_i^{m_i}
 static G1Point commit_disclosed(const Params& params,
-                                std::size_t /*total_messages*/,
                                 const std::vector<std::pair<std::size_t, Scalar>>& disclosed)
 {
     G1Point Bpub = params.g1;
@@ -203,7 +202,7 @@ SDProof create_proof(const Params& params,
     for (auto i : disc) disc_kv.emplace_back(i, msgs[i - 1]);
 
     // B_pub = g1 * ∏_{i∈D} h_i^{m_i}
-    G1Point Bpub = commit_disclosed(params, L, disc_kv);
+    G1Point Bpub = commit_disclosed(params, disc_kv);
 
     // Pairing bases for relation:  E1^e * Π_j Ej^{-m_j} = E0
     // where E0 = e(B_pub, g2) / e(A, pk), E1 = e(A, g2), Ej = e(h_j, g2)
@@ -255,8 +254,14 @@ bool verify_proof(const Params& params,
                   const std::vector<std::pair<std::size_t, ecgroup::Scalar>>& disclosed,
                   std::size_t total_messages)
 {
+    // Basic range check so total_messages is meaningful and misuse is caught early.
+    for (const auto& kv : disclosed) {
+        std::size_t idx = kv.first;
+        if (idx < 1 || idx > total_messages) return false;
+    }
+
     // Recompute B_pub from disclosed values
-    G1Point Bpub = commit_disclosed(params, total_messages, disclosed);
+    G1Point Bpub = commit_disclosed(params, disclosed);
 
     // Rebuild pairing bases
     PairingResult e_Bpub_g2 = pairing(Bpub, params.g2);

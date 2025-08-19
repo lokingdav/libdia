@@ -226,4 +226,10 @@ namespace ecgroup {
         return b;
     }
 
+    PairingResult PairingResult::from_bytes(const Bytes& b) {
+        PairingResult p;
+        p.value.deserialize(b.data(), b.size());
+        return p;
+    }
+
 } // namespace ecgroup

@@ -22,6 +22,7 @@ target_link_libraries(ecgroup PUBLIC mcl)
 # Main C++ Library (dia)
 # -----------------------------------------------------------------------------
 add_library(dia
+  helpers.cpp
   dia.cpp
   voprf.cpp
   amf.cpp

@@ -110,6 +110,7 @@ namespace ecgroup {
         const mcl::bn::Fp12& get_underlying() const;
 
         Bytes to_bytes() const;
+        static PairingResult from_bytes(const Bytes& b);
         
         // Exponentiation and multiplication
         PairingResult pow(const Scalar& s) const;

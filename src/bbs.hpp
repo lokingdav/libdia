@@ -47,6 +47,9 @@ struct KeyPair {
 struct Signature {
     G1Point A;
     Scalar  e;
+
+    Bytes to_bytes() const;
+    static Signature from_bytes(const Bytes& b);
 };
 
 /// Key generation: sk ← Fr, pk = g2^sk.
@@ -79,19 +82,15 @@ bool verify(const Params& params,
  * the 2×G1 ultra-compact form that avoids leaking A.
  */
 struct SDProof {
-    // Copy of signature's A so the verifier can compute pairings (see note above).
     G1Point A;
-
-    // Commitment in GT: T = E1^{r_e} * Π_j Ej^{ - r_j }
     ecgroup::PairingResult T;
+    Scalar z_e;
+    std::vector<std::size_t> hidden_indices; // 1-based
+    std::vector<Scalar>      z_m;
+    std::string nonce;
 
-    // Responses
-    Scalar z_e;                     // z_e = r_e + c * e
-    std::vector<std::size_t> hidden_indices; // 1-based indices of hidden messages (ascending)
-    std::vector<Scalar>      z_m;           // z_m[j] = r_j + c * m_{hidden_indices[j]}
-
-    // For challenge binding/context
-    std::string nonce;   // optional domain/context/nonce bound into the challenge
+    Bytes to_bytes() const;
+    static SDProof from_bytes(const Bytes& b);
 };
 
 /**

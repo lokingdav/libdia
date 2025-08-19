@@ -1,32 +1,15 @@
 #include "amf.hpp"
+#include "helpers.hpp"
+
 #include <stdexcept>
-#include <cstring>   // std::memcpy
-#include <cstdint>
 
 namespace amf {
 
-using ecgroup::PairingResult;
 using ecgroup::FR_SERIALIZED_SIZE;
 using ecgroup::G1_SERIALIZED_SIZE;
+using namespace dia::utils;   // append_u32_be, read_u32_be, append_lp, to_bytes
 
 /* ============================== Utilities =============================== */
-
-static inline Scalar fr_neg(const Scalar& a) { return Scalar::neg(a); }
-static inline Scalar fr_sub(const Scalar& a, const Scalar& b) { return a + fr_neg(b); }
-
-static inline void append_bytes(std::vector<uint8_t>& out, const Bytes& b) {
-    out.insert(out.end(), b.begin(), b.end());
-}
-
-static inline uint32_t be32(const uint8_t* p) {
-    return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | uint32_t(p[3]);
-}
-static inline void be32_write(std::vector<uint8_t>& out, uint32_t v) {
-    out.push_back(uint8_t((v >> 24) & 0xFF));
-    out.push_back(uint8_t((v >> 16) & 0xFF));
-    out.push_back(uint8_t((v >>  8) & 0xFF));
-    out.push_back(uint8_t((v >>  0) & 0xFF));
-}
 
 /* Schnorr: proof of knowledge of w such that y = w*g (additive group) */
 struct SchnorrT { G1Point t; };
@@ -37,7 +20,7 @@ static inline SchnorrT schnorr_commit(const Scalar& a, const G1Point& g) {
 static inline SchnorrT schnorr_sim(const Scalar& z, const Scalar& c,
                                    const G1Point& g, const G1Point& y) {
     // t = z*g - c*y
-    return { G1Point::mul(g, z).add(G1Point::mul(y, fr_neg(c))) };
+    return { G1Point::mul(g, z).add(G1Point::mul(y, Scalar::neg(c))) };
 }
 static inline bool schnorr_verify(const G1Point& t, const Scalar& c, const Scalar& z,
                                   const G1Point& g, const G1Point& y) {
@@ -59,9 +42,9 @@ static inline CPT cp_commit(const Scalar& b, const G1Point& g, const G1Point& u)
 static inline CPT cp_sim(const Scalar& z, const Scalar& c, const G1Point& g,
                          const G1Point& u, const G1Point& v, const G1Point& w) {
     (void)u;
-    // vt = z*g - c*v ; wt = z*u - c*w  (we still pass u to be explicit)
-    G1Point vt = G1Point::mul(g, z).add(G1Point::mul(v, fr_neg(c)));
-    G1Point wt = G1Point::mul(u, z).add(G1Point::mul(w, fr_neg(c)));
+    // vt = z*g - c*v ; wt = z*u - c*w
+    G1Point vt = G1Point::mul(g, z).add(G1Point::mul(v, Scalar::neg(c)));
+    G1Point wt = G1Point::mul(u, z).add(G1Point::mul(w, Scalar::neg(c)));
     return { vt, wt };
 }
 static inline bool cp_verify(const CPT& t, const Scalar& c, const Scalar& z,
@@ -74,16 +57,17 @@ static inline bool cp_verify(const CPT& t, const Scalar& c, const Scalar& z,
     return (lhs1 == rhs1) && (lhs2 == rhs2);
 }
 
-/* Fiat–Shamir challenge over (domain || msg || t00 || t01 || vt10 || wt10 || t11) */
+/* Fiat–Shamir challenge over a length-prefixed transcript:
+ * tag || msg || t00 || t01 || vt10 || wt10 || t11
+ */
 static Scalar amf_challenge(const std::string& msg,
                             const G1Point& t00, const G1Point& t01,
                             const G1Point& vt10, const G1Point& wt10,
                             const G1Point& t11) {
     Bytes buf;
-    const char* tag = "AMF:FS:v1";
-    buf.insert(buf.end(), tag, tag + std::strlen(tag));
-    buf.insert(buf.end(), msg.begin(), msg.end());
-    auto put = [&](const G1Point& P){ Bytes b = P.to_bytes(); buf.insert(buf.end(), b.begin(), b.end()); };
+    append_lp(buf, to_bytes("AMF:FS:v1"));
+    append_lp(buf, to_bytes(msg));
+    auto put = [&](const G1Point& P){ append_lp(buf, P.to_bytes()); };
     put(t00); put(t01); put(vt10); put(wt10); put(t11);
     return Scalar::hash_to_scalar(buf);
 }
@@ -140,13 +124,13 @@ Signature Frank(const Scalar& sk_s,
     Scalar c = amf_challenge(msg, S.t00, S.t01, S.vt10, S.wt10, S.t11);
 
     // disj0 responses
-    Scalar c_b0 = fr_sub(c, cd0);
+    Scalar c_b0 = c + Scalar::neg(cd0);
     S.c0 = c_b0;
     S.z0 = a0 + (sk_s * c_b0);
     S.z1 = zd0;
 
     // disj1 responses
-    Scalar c_b1 = fr_sub(c, cd1);
+    Scalar c_b1 = c + Scalar::neg(cd1);
     S.c0p = c_b1;
     S.z0p = b0 + (alpha * c_b1);
     S.z1p = zd1;
@@ -169,14 +153,14 @@ bool Verify(const G1Point& pk_s,
     Scalar c = amf_challenge(msg, S.t00, S.t01, S.vt10, S.wt10, S.t11);
 
     // disj0: branch-0 Schnorr(pk_s), branch-1 Schnorr(T)
-    Scalar c1 = fr_sub(c, S.c0);
+    Scalar c1 = c + Scalar::neg(S.c0);
     if (!(schnorr_verify(S.t00, S.c0, S.z0, g, pk_s) &&
           schnorr_verify(S.t01, c1,   S.z1, g, S.T))) {
         return false;
     }
 
     // disj1: branch-0 CP(pk_j,A,T), branch-1 Schnorr(U)
-    Scalar c1p = fr_sub(c, S.c0p);
+    Scalar c1p = c + Scalar::neg(S.c0p);
     CPT t{ S.vt10, S.wt10 };
     if (!(cp_verify(t, S.c0p, S.z0p, g, pk_j, S.A, S.T) &&
           schnorr_verify(S.t11, c1p,   S.z1p, g, S.U))) {
@@ -200,7 +184,7 @@ bool Judge(const G1Point& pk_s,
     Scalar c = amf_challenge(msg, S.t00, S.t01, S.vt10, S.wt10, S.t11);
 
     // disj0
-    Scalar c1 = fr_sub(c, S.c0);
+    Scalar c1 = c + Scalar::neg(S.c0);
     if (!(schnorr_verify(S.t00, S.c0, S.z0, g, pk_s) &&
           schnorr_verify(S.t01, c1,   S.z1, g, S.T))) {
         return false;
@@ -208,7 +192,7 @@ bool Judge(const G1Point& pk_s,
 
     // disj1 (use pk_j = sk_j * g)
     G1Point pk_j = G1Point::mul(g, sk_j);
-    Scalar c1p = fr_sub(c, S.c0p);
+    Scalar c1p = c + Scalar::neg(S.c0p);
     CPT t{ S.vt10, S.wt10 };
     if (!(cp_verify(t, S.c0p, S.z0p, g, pk_j, S.A, S.T) &&
           schnorr_verify(S.t11, c1p,   S.z1p, g, S.U))) {
@@ -218,13 +202,7 @@ bool Judge(const G1Point& pk_s,
 }
 
 /* ------------------------------ Forgeries ------------------------------ */
-/* These construct signatures with different “real” branches to match tests.  */
 
-/** Public Forge: break both bindings, keep proofs valid.
- *  - Set T = gamma*g, U = delta*g (no relation to pk_r, pk_j).
- *  - disj0 real branch: Schnorr(T) (branch-1) with witness gamma.
- *  - disj1 real branch: Schnorr(U) (branch-1) with witness delta.
- */
 Signature Forge(const G1Point& pk_s,
                 const G1Point& pk_r,
                 const G1Point& pk_j,
@@ -246,8 +224,6 @@ Signature Forge(const G1Point& pk_s,
 
     // disj0: simulate branch-0 (pk_s), real branch-1 (T with witness gamma)
     Scalar cd0 = Scalar::get_random(), zd0 = Scalar::get_random();
-    S.t00 = schnorr_sim(zd0, cd0, g, G1Point::mul(g, Scalar::get_random())).t; // y unused; any y ok since simulated
-    // Use pk_s as y for simulation to be consistent:
     S.t00 = schnorr_sim(zd0, cd0, g, pk_s).t;
 
     Scalar a1 = Scalar::get_random();
@@ -255,7 +231,6 @@ Signature Forge(const G1Point& pk_s,
 
     // disj1: simulate branch-0 (CP), real branch-1 (Schnorr(U) with witness delta)
     Scalar cd1 = Scalar::get_random(), zd1 = Scalar::get_random();
-    // CP simulate with v=A, w=T and u=pk_j:
     CPT tcp = cp_sim(zd1, cd1, g, pk_j, S.A, S.T);
     S.vt10 = tcp.vt; S.wt10 = tcp.wt;
 
@@ -267,24 +242,19 @@ Signature Forge(const G1Point& pk_s,
 
     // disj0 responses (store c0 for branch-0; real is branch-1)
     S.c0 = cd0;
-    Scalar c1 = fr_sub(c, S.c0);
+    Scalar c1 = c + Scalar::neg(S.c0);
     S.z0 = zd0;                        // simulated
     S.z1 = a1 + (gamma * c1);          // real
 
     // disj1 responses (store c0p for branch-0; real is branch-1)
     S.c0p = cd1;
-    Scalar c1p = fr_sub(c, S.c0p);
+    Scalar c1p = c + Scalar::neg(S.c0p);
     S.z0p = zd1;                       // simulated CP
     S.z1p = aU + (delta * c1p);        // real Schnorr(U)
 
     return S;
 }
 
-/** RForge: Verify passes, Judge fails.
- *  - Set U = beta*pk_r (so U == sk_r*B), T = gamma*g (unrelated to A).
- *  - disj0 real branch: Schnorr(T) (branch-1) with witness gamma.
- *  - disj1 real branch: Schnorr(U) (branch-1) with witness beta*sk_r (exists).
- */
 Signature RForge(const G1Point& pk_s,
                  const Scalar&  sk_r,
                  const G1Point& pk_j,
@@ -321,12 +291,12 @@ Signature RForge(const G1Point& pk_s,
     Scalar c = amf_challenge(msg, S.t00, S.t01, S.vt10, S.wt10, S.t11);
 
     S.c0 = cd0;
-    Scalar c1 = fr_sub(c, S.c0);
+    Scalar c1 = c + Scalar::neg(S.c0);
     S.z0 = zd0;
     S.z1 = a1 + (gamma * c1);
 
     S.c0p = cd1;
-    Scalar c1p = fr_sub(c, S.c0p);
+    Scalar c1p = c + Scalar::neg(S.c0p);
     Scalar wU = beta * sk_r; // witness for U relative to g
     S.z0p = zd1;
     S.z1p = aU + (wU * c1p);
@@ -334,11 +304,6 @@ Signature RForge(const G1Point& pk_s,
     return S;
 }
 
-/** JForge: both Verify and Judge pass.
- *  - Set T = alpha*pk_j, U = beta*pk_r (both bindings hold).
- *  - disj0 real branch: Schnorr(T) (branch-1) with witness alpha*sk_j.
- *  - disj1 real branch: CP (branch-0) with witness alpha.
- */
 Signature JForge(const G1Point& pk_s,
                  const G1Point& pk_r,
                  const Scalar&  sk_j,
@@ -377,13 +342,13 @@ Signature JForge(const G1Point& pk_s,
 
     // disj0 responses
     S.c0 = cd0;                   // branch-0 simulated
-    Scalar c1 = fr_sub(c, S.c0);  // branch-1 real
+    Scalar c1 = c + Scalar::neg(S.c0);  // branch-1 real
     Scalar wT = alpha * sk_j;
     S.z0 = zd0;
     S.z1 = aT + (wT * c1);
 
     // disj1 responses
-    Scalar c_b1 = fr_sub(c, cd1); // branch-0 real CP (c0p)
+    Scalar c_b1 = c + Scalar::neg(cd1); // branch-0 real CP (c0p)
     S.c0p = c_b1;
     S.z0p = b0 + (alpha * c_b1);  // CP response
     S.z1p = zd1;                  // Schnorr(U) simulated
@@ -401,17 +366,22 @@ Signature JForge(const G1Point& pk_s,
  *   vt10,wt10,t11           (3 × G1)
  *   c0p,z0p,z1p             (3 × Fr)
  */
-
 static constexpr uint32_t AMF_MAGIC = 0x414D4631u; // "AMF1"
 
 Bytes Signature::to_bytes() const {
     std::vector<uint8_t> out;
     out.reserve(4 + 9 * G1_SERIALIZED_SIZE + 6 * FR_SERIALIZED_SIZE);
 
-    be32_write(out, AMF_MAGIC);
+    append_u32_be(out, AMF_MAGIC);
 
-    auto put_g1 = [&](const G1Point& P){ append_bytes(out, P.to_bytes()); };
-    auto put_fr = [&](const Scalar& s){ append_bytes(out, s.to_bytes()); };
+    auto put_g1 = [&](const G1Point& P){
+        Bytes b = P.to_bytes();
+        out.insert(out.end(), b.begin(), b.end());
+    };
+    auto put_fr = [&](const Scalar& s){
+        Bytes b = s.to_bytes();
+        out.insert(out.end(), b.begin(), b.end());
+    };
 
     put_g1(T); put_g1(U); put_g1(A); put_g1(B);
     put_g1(t00); put_g1(t01);
@@ -424,35 +394,41 @@ Bytes Signature::to_bytes() const {
 
 Signature Signature::from_bytes(const Bytes& in) {
     Signature S{};
-    const uint8_t* p   = in.data();
-    const uint8_t* end = in.data() + in.size();
+    std::size_t off = 0;
 
-    auto need = [&](size_t n){ return size_t(end - p) >= n; };
-    auto rd_g1 = [&](G1Point& P)->bool {
-        if (!need(G1_SERIALIZED_SIZE)) return false;
-        P = G1Point::from_bytes(Bytes(p, p + G1_SERIALIZED_SIZE));
-        p += G1_SERIALIZED_SIZE; return true;
-    };
-    auto rd_fr = [&](Scalar& s)->bool {
-        if (!need(FR_SERIALIZED_SIZE)) return false;
-        s = Scalar::from_bytes(Bytes(p, p + FR_SERIALIZED_SIZE));
-        p += FR_SERIALIZED_SIZE; return true;
-    };
-
-    if (!need(4)) throw std::runtime_error("amf::Signature: truncated");
-    uint32_t magic = be32(p); p += 4;
+    if (in.size() < 4) throw std::runtime_error("amf::Signature: truncated");
+    uint32_t magic = read_u32_be(in, off);
     if (magic != AMF_MAGIC) throw std::runtime_error("amf::Signature: bad magic");
 
-    if (!rd_g1(S.T) || !rd_g1(S.U) || !rd_g1(S.A) || !rd_g1(S.B)) goto err;
-    if (!rd_g1(S.t00) || !rd_g1(S.t01)) goto err;
-    if (!rd_fr(S.c0)  || !rd_fr(S.z0)  || !rd_fr(S.z1)) goto err;
-    if (!rd_g1(S.vt10) || !rd_g1(S.wt10) || !rd_g1(S.t11)) goto err;
-    if (!rd_fr(S.c0p)  || !rd_fr(S.z0p)  || !rd_fr(S.z1p)) goto err;
+    auto take = [&](std::size_t n) -> Bytes {
+        if (off + n > in.size()) throw std::runtime_error("amf::Signature: truncated");
+        Bytes b(in.begin() + off, in.begin() + off + n);
+        off += n;
+        return b;
+    };
 
-    if (p != end) throw std::runtime_error("amf::Signature: extra bytes");
+    S.T   = G1Point::from_bytes(take(G1_SERIALIZED_SIZE));
+    S.U   = G1Point::from_bytes(take(G1_SERIALIZED_SIZE));
+    S.A   = G1Point::from_bytes(take(G1_SERIALIZED_SIZE));
+    S.B   = G1Point::from_bytes(take(G1_SERIALIZED_SIZE));
+
+    S.t00 = G1Point::from_bytes(take(G1_SERIALIZED_SIZE));
+    S.t01 = G1Point::from_bytes(take(G1_SERIALIZED_SIZE));
+
+    S.c0  = Scalar::from_bytes(take(FR_SERIALIZED_SIZE));
+    S.z0  = Scalar::from_bytes(take(FR_SERIALIZED_SIZE));
+    S.z1  = Scalar::from_bytes(take(FR_SERIALIZED_SIZE));
+
+    S.vt10 = G1Point::from_bytes(take(G1_SERIALIZED_SIZE));
+    S.wt10 = G1Point::from_bytes(take(G1_SERIALIZED_SIZE));
+    S.t11  = G1Point::from_bytes(take(G1_SERIALIZED_SIZE));
+
+    S.c0p  = Scalar::from_bytes(take(FR_SERIALIZED_SIZE));
+    S.z0p  = Scalar::from_bytes(take(FR_SERIALIZED_SIZE));
+    S.z1p  = Scalar::from_bytes(take(FR_SERIALIZED_SIZE));
+
+    if (off != in.size()) throw std::runtime_error("amf::Signature: extra bytes");
     return S;
-err:
-    throw std::runtime_error("amf::Signature: truncated");
 }
 
 } // namespace amf

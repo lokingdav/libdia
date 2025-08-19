@@ -7,6 +7,7 @@
 #include <vector>
 #include <string>
 #include <utility>
+#include <stdexcept>
 
 static ecgroup::Scalar nonzero_e_avoiding(const ecgroup::Scalar& sk, int salt = 0) {
     // Find an e such that sk + e != 0
@@ -54,6 +55,22 @@ TEST_CASE("BBS (compact) sign/verify and selective disclosure", "[bbs]") {
         bbs::Signature sig = bbs::sign_with_e(params, issuer.sk, msgs, e);
         REQUIRE(sig.e == e);
         REQUIRE(bbs::verify(params, issuer.pk, msgs, sig));
+    }
+
+    SECTION("Signature serialization roundtrip") {
+        bbs::Signature sig = bbs::sign(params, issuer.sk, msgs);
+        auto ser = sig.to_bytes();
+        REQUIRE(!ser.empty());
+
+        bbs::Signature dec = bbs::Signature::from_bytes(ser);
+        REQUIRE(dec.A == sig.A);
+        REQUIRE(dec.e == sig.e);
+        REQUIRE(bbs::verify(params, issuer.pk, msgs, dec));
+
+        // Trailing data should be rejected
+        auto bad = ser;
+        bad.push_back(0x00);
+        REQUIRE_THROWS_AS(bbs::Signature::from_bytes(bad), std::runtime_error);
     }
 
     SECTION("Selective disclosure: reveal none (k=0)") {
@@ -172,5 +189,45 @@ TEST_CASE("BBS (compact) sign/verify and selective disclosure", "[bbs]") {
         if (!tam.z_m.empty()) tam.z_m.pop_back();
         REQUIRE_FALSE(bbs::verify_proof(params, issuer.pk, tam, disclosed_vals, L));
         REQUIRE(bbs::verify_proof(params, issuer.pk, prf, disclosed_vals, L));
+    }
+
+    SECTION("SDProof serialization roundtrip (k=0)") {
+        bbs::Signature sig = bbs::sign(params, issuer.sk, msgs);
+        std::vector<std::size_t> disclose; // none
+        std::string nonce = "serdes-k0";
+        bbs::SDProof prf = bbs::create_proof(params, issuer.pk, sig, msgs, disclose, nonce);
+
+        auto ser = prf.to_bytes();
+        REQUIRE(!ser.empty());
+
+        bbs::SDProof dec = bbs::SDProof::from_bytes(ser);
+        // Basic field sanity
+        REQUIRE(dec.A == prf.A);
+        REQUIRE(dec.z_e == prf.z_e);
+        REQUIRE(dec.hidden_indices.size() == prf.hidden_indices.size());
+        REQUIRE(dec.z_m.size() == prf.z_m.size());
+
+        std::vector<std::pair<std::size_t, ecgroup::Scalar>> disclosed_vals; // none
+        REQUIRE(bbs::verify_proof(params, issuer.pk, dec, disclosed_vals, L));
+
+        // Trailing data should be rejected
+        auto bad = ser;
+        bad.push_back(0x00);
+        REQUIRE_THROWS_AS(bbs::SDProof::from_bytes(bad), std::runtime_error);
+    }
+
+    SECTION("SDProof serialization roundtrip (subset {1,3})") {
+        bbs::Signature sig = bbs::sign(params, issuer.sk, msgs);
+        std::vector<std::size_t> disclose = {1, 3};
+        std::string nonce = "serdes-subset";
+        bbs::SDProof prf = bbs::create_proof(params, issuer.pk, sig, msgs, disclose, nonce);
+
+        auto ser = prf.to_bytes();
+        bbs::SDProof dec = bbs::SDProof::from_bytes(ser);
+
+        std::vector<std::pair<std::size_t, ecgroup::Scalar>> disclosed_vals = {
+            {1, msgs[0]}, {3, msgs[2]}
+        };
+        REQUIRE(bbs::verify_proof(params, issuer.pk, dec, disclosed_vals, L));
     }
 }
