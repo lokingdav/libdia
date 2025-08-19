@@ -1,42 +1,15 @@
 #include "bbs.hpp"
+#include "helpers.hpp"
+
 #include <algorithm>
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 
 namespace bbs {
+
 using namespace ecgroup;
-
-static inline Bytes toBytes(const std::string& s) {
-    return Bytes(s.begin(), s.end());
-}
-
-static inline void appendU32BE(Bytes& out, uint32_t v) {
-    out.push_back(static_cast<uint8_t>((v >> 24) & 0xFF));
-    out.push_back(static_cast<uint8_t>((v >> 16) & 0xFF));
-    out.push_back(static_cast<uint8_t>((v >>  8) & 0xFF));
-    out.push_back(static_cast<uint8_t>((v >>  0) & 0xFF));
-}
-
-static inline void appendLP(Bytes& out, const Bytes& b) {
-    appendU32BE(out, static_cast<uint32_t>(b.size()));
-    out.insert(out.end(), b.begin(), b.end());
-}
-
-static inline void appendPoint(Bytes& out, const G1Point& P) {
-    appendLP(out, P.to_bytes());
-}
-
-static inline void appendG2(Bytes& out, const G2Point& Q) {
-    appendLP(out, Q.to_bytes());
-}
-
-static inline void appendGT(Bytes& out, const PairingResult& t) {
-    appendLP(out, t.to_bytes());
-}
-
-static inline void appendScalar(Bytes& out, const Scalar& s) {
-    appendLP(out, s.to_bytes());
-}
+using namespace dia::utils;
 
 /*========================  Params  ========================*/
 
@@ -138,10 +111,9 @@ bool verify(const Params& params,
 
 // Build B_pub = g1 * Π_{i in disclosed} h_i^{m_i}
 static G1Point commit_disclosed(const Params& params,
-                                std::size_t total_messages,
+                                std::size_t /*total_messages*/,
                                 const std::vector<std::pair<std::size_t, Scalar>>& disclosed)
 {
-    (void)total_messages; // not needed to compute B_pub, but kept for interface symmetry
     G1Point Bpub = params.g1;
     for (const auto& kv : disclosed) {
         std::size_t idx = kv.first; // 1-based
@@ -179,29 +151,29 @@ static Scalar fs_challenge(const Params& params,
 {
     Bytes buf;
     // Domain separation
-    appendLP(buf, toBytes(params.domain_tag));
-    appendLP(buf, toBytes("BBS:SDP:GTv1"));
+    append_lp(buf, to_bytes(params.domain_tag));
+    append_lp(buf, to_bytes("BBS:SDP:GTv1"));
 
     // Public inputs
-    appendG2(buf, pk);
-    appendPoint(buf, A);
-    appendPoint(buf, Bpub);
+    append_lp(buf, pk.to_bytes());
+    append_lp(buf, A.to_bytes());
+    append_lp(buf, Bpub.to_bytes());
 
     // Hidden indices
-    appendU32BE(buf, static_cast<uint32_t>(hidden_idx.size()));
-    for (auto id : hidden_idx) appendU32BE(buf, static_cast<uint32_t>(id));
+    append_u32_be(buf, static_cast<uint32_t>(hidden_idx.size()));
+    for (auto id : hidden_idx) append_u32_be(buf, static_cast<uint32_t>(id));
 
     // Pairing bases
-    appendGT(buf, E0);
-    appendGT(buf, E1);
-    appendU32BE(buf, static_cast<uint32_t>(Ej.size()));
-    for (const auto& e : Ej) appendGT(buf, e);
+    append_lp(buf, E0.to_bytes());
+    append_lp(buf, E1.to_bytes());
+    append_u32_be(buf, static_cast<uint32_t>(Ej.size()));
+    for (const auto& e : Ej) append_lp(buf, e.to_bytes());
 
     // Commitment
-    appendGT(buf, T);
+    append_lp(buf, T.to_bytes());
 
     // Context/nonce
-    appendLP(buf, toBytes(nonce));
+    append_lp(buf, to_bytes(nonce));
 
     return Scalar::hash_to_scalar(buf);
 }
@@ -314,5 +286,74 @@ bool verify_proof(const Params& params,
     return (lhs == rhs);
 }
 
+/*========================  Signature / Proof serialization  ========================*/
+
+Bytes Signature::to_bytes() const {
+    Bytes out;
+    append_lp(out, A.to_bytes()); // LP(G1)
+    append_lp(out, e.to_bytes()); // LP(Fr)
+    return out;
+}
+
+Signature Signature::from_bytes(const Bytes& b) {
+    std::size_t off = 0;
+    Signature s;
+    s.A = G1Point::from_bytes(read_lp(b, off));
+    s.e = Scalar::from_bytes(read_lp(b, off));
+    if (off != b.size()) throw std::runtime_error("Signature::from_bytes: trailing data");
+    return s;
+}
+
+Bytes SDProof::to_bytes() const {
+    Bytes out;
+    // A, T, z_e
+    append_lp(out, A.to_bytes());   // LP(G1)
+    append_lp(out, T.to_bytes());   // LP(GT/Fp12)
+    append_lp(out, z_e.to_bytes()); // LP(Fr)
+
+    // hidden_indices (u32 count + raw u32 entries)
+    append_u32_be(out, static_cast<uint32_t>(hidden_indices.size()));
+    for (auto idx : hidden_indices) {
+        append_u32_be(out, static_cast<uint32_t>(idx));
+    }
+
+    // z_m (u32 count + LP(Fr) items)
+    append_u32_be(out, static_cast<uint32_t>(z_m.size()));
+    for (const auto& zm : z_m) {
+        append_lp(out, zm.to_bytes());
+    }
+
+    // nonce as LP(bytes)
+    append_lp(out, Bytes(nonce.begin(), nonce.end()));
+    return out;
+}
+
+SDProof SDProof::from_bytes(const Bytes& b) {
+    std::size_t off = 0;
+    SDProof p;
+    p.A   = G1Point::from_bytes(read_lp(b, off));
+    p.T   = PairingResult::from_bytes(read_lp(b, off)); // requires ecgroup to expose from_bytes
+    p.z_e = Scalar::from_bytes(read_lp(b, off));
+
+    // hidden_indices
+    uint32_t n_hidden = read_u32_be(b, off);
+    p.hidden_indices.resize(n_hidden);
+    for (uint32_t i = 0; i < n_hidden; ++i) {
+        p.hidden_indices[i] = static_cast<std::size_t>(read_u32_be(b, off));
+    }
+
+    // z_m
+    uint32_t n_zm = read_u32_be(b, off);
+    p.z_m.resize(n_zm);
+    for (uint32_t i = 0; i < n_zm; ++i) {
+        p.z_m[i] = Scalar::from_bytes(read_lp(b, off));
+    }
+
+    // nonce
+    p.nonce = read_string(b, off);
+
+    if (off != b.size()) throw std::runtime_error("SDProof::from_bytes: trailing data");
+    return p;
+}
 
 } // namespace bbs
