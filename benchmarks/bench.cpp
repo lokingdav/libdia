@@ -10,6 +10,8 @@
 #include "voprf.hpp"
 #include "bbs.hpp"
 
+using ecgroup::Bytes;
+
 /**
  * @brief A simple class to run benchmarks and print formatted results.
  */
@@ -127,6 +129,22 @@ int main() {
         (void)sink;
     });
 
+    // --- AMF serialization micro-benchmarks ---
+    {
+        Bytes amf_bytes = sig_ok.to_bytes();
+        std::cout << "AMF Signature size: " << amf_bytes.size() << " bytes\n";
+        protocol_runner.run("AMF Sig Serialize", [&]() {
+            Bytes b = sig_ok.to_bytes();
+            volatile size_t sink = b.size();
+            (void)sink;
+        });
+        protocol_runner.run("AMF Sig Deserialize", [&]() {
+            amf::Signature s = amf::Signature::from_bytes(amf_bytes);
+            volatile bool sink = (s.A == sig_ok.A); // arbitrary equality check
+            (void)sink;
+        });
+    }
+
     // =====================================================================
     // SECTION 3: VOPRF
     // =====================================================================
@@ -227,6 +245,22 @@ int main() {
         (void)sink;
     });
 
+    // --- BBS signature serialization micro-benchmarks ---
+    {
+        Bytes bbs_sig_bytes = bsig.to_bytes();
+        std::cout << "BBS Signature size: " << bbs_sig_bytes.size() << " bytes\n";
+        protocol_runner.run("BBS Sig Serialize", [&]() {
+            Bytes b = bsig.to_bytes();
+            volatile size_t sink = b.size();
+            (void)sink;
+        });
+        protocol_runner.run("BBS Sig Deserialize", [&]() {
+            bbs::Signature s = bbs::Signature::from_bytes(bbs_sig_bytes);
+            volatile bool sink = (s.e == bsig.e);
+            (void)sink;
+        });
+    }
+
     // --- Selective Disclosure: k = 0 (reveal none) ---
     std::vector<std::size_t> disclose0; // empty
     bbs::SDProof prf0 = bbs::create_proof(bparams, issuer.pk, bsig, msgs, disclose0, "bench-k0");
@@ -243,6 +277,22 @@ int main() {
         volatile bool sink = ok;
         (void)sink;
     });
+
+    // --- SD proof serialization (k=0) ---
+    {
+        Bytes prf0_bytes = prf0.to_bytes();
+        std::cout << "BBS SDProof(k=0) size: " << prf0_bytes.size() << " bytes\n";
+        protocol_runner.run("BBS SDP Serialize (k=0)", [&]() {
+            Bytes b = prf0.to_bytes();
+            volatile size_t sink = b.size();
+            (void)sink;
+        });
+        protocol_runner.run("BBS SDP Deserialize (k=0)", [&]() {
+            bbs::SDProof q = bbs::SDProof::from_bytes(prf0_bytes);
+            volatile bool sink = (q.hidden_indices.size() == prf0.hidden_indices.size());
+            (void)sink;
+        });
+    }
 
     // --- Selective Disclosure: k ≈ L/2 (reveal half) ---
     std::vector<std::size_t> discloseHalf;
@@ -265,6 +315,22 @@ int main() {
         volatile bool sink = ok;
         (void)sink;
     });
+
+    // --- SD proof serialization (k=L/2) ---
+    {
+        Bytes prfH_bytes = prfH.to_bytes();
+        std::cout << "BBS SDProof(k=L/2) size: " << prfH_bytes.size() << " bytes\n";
+        protocol_runner.run("BBS SDP Serialize (k=L/2)", [&]() {
+            Bytes b = prfH.to_bytes();
+            volatile size_t sink = b.size();
+            (void)sink;
+        });
+        protocol_runner.run("BBS SDP Deserialize (k=L/2)", [&]() {
+            bbs::SDProof q = bbs::SDProof::from_bytes(prfH_bytes);
+            volatile bool sink = (q.hidden_indices.size() == prfH.hidden_indices.size());
+            (void)sink;
+        });
+    }
 
     return 0;
 }

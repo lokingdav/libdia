@@ -14,7 +14,7 @@ extern "C" {
 #define DIA_OK                0
 #define DIA_ERR              -1
 #define DIA_ERR_INVALID_ARG  -2
-#define DIA_ERR_VERIFY_FAIL  -3
+#define DIA_ERR_VERIFY_FAIL  -3  /* (kept for ABI compatibility; no longer returned by *_verify) */
 #define DIA_ERR_ALLOC        -4
 
 /*==============================================================================
@@ -59,10 +59,14 @@ int dia_voprf_unblind(const unsigned char element[DIA_G1_LEN],
                       const unsigned char blind[DIA_FR_LEN],
                       /*out*/ unsigned char out_Y[DIA_G1_LEN]);
 
-/** Verify a single OPRF output Y against input and server pk. */
+/**
+ * Verify a single OPRF output Y against input and server pk.
+ * Returns DIA_OK and sets *result to 1 (valid) or 0 (invalid).
+ */
 int dia_voprf_verify(const unsigned char* input, size_t input_len,
                      const unsigned char Y[DIA_G1_LEN],
-                     const unsigned char pk[DIA_G2_LEN]);
+                     const unsigned char pk[DIA_G2_LEN],
+                     /*out*/ int* result);
 
 /**
  * Verify a batch of OPRF outputs in one shot (2 pairings).
@@ -70,12 +74,14 @@ int dia_voprf_verify(const unsigned char* input, size_t input_len,
  * input_lens:  array of lengths (same length as inputs)
  * n:           number of items
  * Y_concat:    n concatenated G1 elements (n * DIA_G1_LEN bytes)
+ * Returns DIA_OK and sets *result to 1 (all valid) or 0 (invalid).
  */
 int dia_voprf_verify_batch(const unsigned char* const* inputs,
                            const size_t* input_lens,
                            size_t n,
                            const unsigned char* Y_concat,
-                           const unsigned char pk[DIA_G2_LEN]);
+                           const unsigned char pk[DIA_G2_LEN],
+                           /*out*/ int* result);
 
 /*==============================================================================
  * AMF (Asymmetric Message Franking)
@@ -100,29 +106,31 @@ int dia_amf_frank(const unsigned char sk_sender[DIA_FR_LEN],
 
 /**
  * Verify (receiver): check signature validity and that it is bound to receiver’s sk.
- * Uses opaque signature blob produced by dia_amf_frank.
+ * Returns DIA_OK and sets *result to 1 (valid) or 0 (invalid).
  */
 int dia_amf_verify(const unsigned char pk_sender[DIA_G1_LEN],
                    const unsigned char sk_receiver[DIA_FR_LEN],
                    const unsigned char pk_judge[DIA_G1_LEN],
                    const unsigned char* msg, size_t msg_len,
-                   const unsigned char* sig_blob, size_t sig_blob_len);
+                   const unsigned char* sig_blob, size_t sig_blob_len,
+                   /*out*/ int* result);
 
 /**
  * Judge (moderator): verify signature and that it is bound to judge’s sk.
- * Uses the same opaque signature blob produced by dia_amf_frank.
+ * Returns DIA_OK and sets *result to 1 (valid) or 0 (invalid).
  */
 int dia_amf_judge(const unsigned char pk_sender[DIA_G1_LEN],
                   const unsigned char pk_receiver[DIA_G1_LEN],
                   const unsigned char sk_judge[DIA_FR_LEN],
                   const unsigned char* msg, size_t msg_len,
-                  const unsigned char* sig_blob, size_t sig_blob_len);
+                  const unsigned char* sig_blob, size_t sig_blob_len,
+                  /*out*/ int* result);
 
 /*==============================================================================
- * BBS (compact short signature) + Selective Disclosure (GT-based, working one)
- *  - Issuer pk in G2 (pk = g2^sk), signature is (A in G1, e in Fr).
- *  - Messages are raw byte strings; internally hashed to Scalars.
- *  - SD proof is returned as an opaque byte blob; free with free_byte_buffer().
+ * BBS (compact signature) + Selective Disclosure (GT-based)
+ *  - Issuer pk in G2 (pk = g2^sk), secret is Fr.
+ *  - Messages are raw byte strings; hashed to Scalars internally.
+ *  - Signatures and proofs are **opaque byte blobs** (allocated).
  *============================================================================*/
 
 /** BBS key generation: sk (Fr), pk (G2). */
@@ -130,36 +138,30 @@ int dia_bbs_keygen(/*out*/ unsigned char sk[DIA_FR_LEN],
                    /*out*/ unsigned char pk[DIA_G2_LEN]);
 
 /**
- * BBS sign over a list of messages (hashed internally to Scalars).
- * msgs:       array of pointers to message buffers
- * msg_lens:   array of lengths (same length as msgs)
- * n_msgs:     number of messages
- * Outputs: A (G1) and e (Fr).
+ * BBS sign over a list of messages (hashed internally).
+ * Output: signature blob `sig_blob` (allocated; free with free_byte_buffer()).
  */
 int dia_bbs_sign(const unsigned char* const* msgs,
                  const size_t* msg_lens,
                  size_t n_msgs,
                  const unsigned char sk[DIA_FR_LEN],
-                 /*out*/ unsigned char A[DIA_G1_LEN],
-                 /*out*/ unsigned char e[DIA_FR_LEN]);
+                 /*out*/ unsigned char** sig_blob,
+                 /*out*/ size_t* sig_blob_len);
 
-/** Verify a BBS signature (messages are hashed internally). */
+/** Verify a BBS signature (messages are hashed internally).
+ *  Returns DIA_OK and sets *result to 1 (valid) or 0 (invalid).
+ */
 int dia_bbs_verify(const unsigned char* const* msgs,
                    const size_t* msg_lens,
                    size_t n_msgs,
                    const unsigned char pk[DIA_G2_LEN],
-                   const unsigned char A[DIA_G1_LEN],
-                   const unsigned char e[DIA_FR_LEN]);
+                   const unsigned char* sig_blob,
+                   size_t sig_blob_len,
+                   /*out*/ int* result);
 
 /**
- * Create a GT-based selective-disclosure proof (the working variant).
- * msgs/msg_lens/n_msgs:  full message set as byte strings
- * disclose_idx_1based:   indices to disclose (1-based; ascending or any order)
- * n_disclose:            number of disclosed indices
- * pk:                    issuer public key (G2)
- * (A,e):                 BBS signature
- * nonce/nonce_len:       presentation context bound into Fiat–Shamir
- * Output:                proof_blob (allocated opaque), proof_blob_len
+ * Create a selective-disclosure proof (GT-based working variant).
+ * Output: proof_blob (allocated opaque), proof_blob_len.
  */
 int dia_bbs_proof_create(const unsigned char* const* msgs,
                          const size_t* msg_lens,
@@ -167,19 +169,16 @@ int dia_bbs_proof_create(const unsigned char* const* msgs,
                          const uint32_t* disclose_idx_1based,
                          size_t n_disclose,
                          const unsigned char pk[DIA_G2_LEN],
-                         const unsigned char A[DIA_G1_LEN],
-                         const unsigned char e[DIA_FR_LEN],
+                         const unsigned char* sig_blob,
+                         size_t sig_blob_len,
                          const unsigned char* nonce,
                          size_t nonce_len,
                          /*out*/ unsigned char** proof_blob,
                          /*out*/ size_t* proof_blob_len);
 
 /**
- * Verify a GT-based SD proof.
- * disclosed_idx_1based / disclosed_msgs / disclosed_lens:
- *     the subset revealed by the prover (index,value pairs).
- * pk, nonce: the same context used during proof creation.
- * proof_blob/proof_blob_len: the opaque proof returned by dia_bbs_proof_create.
+ * Verify a selective-disclosure proof.
+ * Returns DIA_OK and sets *result to 1 (valid) or 0 (invalid).
  */
 int dia_bbs_proof_verify(const uint32_t* disclosed_idx_1based,
                          const unsigned char* const* disclosed_msgs,
@@ -189,7 +188,8 @@ int dia_bbs_proof_verify(const uint32_t* disclosed_idx_1based,
                          const unsigned char* nonce,
                          size_t nonce_len,
                          const unsigned char* proof_blob,
-                         size_t proof_blob_len);
+                         size_t proof_blob_len,
+                         /*out*/ int* result);
 
 #ifdef __cplusplus
 }

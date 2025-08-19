@@ -42,8 +42,10 @@ TEST_CASE("C ABI: VOPRF / AMF / BBS smoke tests", "[dia_c]") {
         REQUIRE(dia_voprf_unblind(element, blind, Y) == DIA_OK);
 
         // Single verify
+        int v_ok = 0;
         REQUIRE(dia_voprf_verify(reinterpret_cast<const unsigned char*>(in.data()), in.size(),
-                                 Y, pk) == DIA_OK);
+                                 Y, pk, &v_ok) == DIA_OK);
+        REQUIRE(v_ok == 1);
 
         // Batch verify (two items)
         std::vector<std::string> ins = {"alpha", "beta"};
@@ -69,9 +71,11 @@ TEST_CASE("C ABI: VOPRF / AMF / BBS smoke tests", "[dia_c]") {
         std::memcpy(Y_concat.data(), Y1, DIA_G1_LEN);
         std::memcpy(Y_concat.data() + DIA_G1_LEN, Y2, DIA_G1_LEN);
 
+        int vb_ok = 0;
         REQUIRE(dia_voprf_verify_batch(reinterpret_cast<const unsigned char* const*>(ptrs.data()),
                                        lens.data(), ins.size(),
-                                       Y_concat.data(), pk) == DIA_OK);
+                                       Y_concat.data(), pk, &vb_ok) == DIA_OK);
+        REQUIRE(vb_ok == 1);
     }
 
     SECTION("AMF: Frank -> Verify & Judge; plus negative cases") {
@@ -94,50 +98,67 @@ TEST_CASE("C ABI: VOPRF / AMF / BBS smoke tests", "[dia_c]") {
         REQUIRE(sig_len > 0);
 
         // Verify & Judge success
+        int v_ok = 0, j_ok = 0;
         REQUIRE(dia_amf_verify(S_pk, R_sk, J_pk,
                                reinterpret_cast<const unsigned char*>(msg.data()), msg.size(),
-                               sig_blob, sig_len) == DIA_OK);
+                               sig_blob, sig_len, &v_ok) == DIA_OK);
+        REQUIRE(v_ok == 1);
         REQUIRE(dia_amf_judge(S_pk, R_pk, J_sk,
                               reinterpret_cast<const unsigned char*>(msg.data()), msg.size(),
-                              sig_blob, sig_len) == DIA_OK);
+                              sig_blob, sig_len, &j_ok) == DIA_OK);
+        REQUIRE(j_ok == 1);
 
         // Negative: different message
         const std::string other = "different message";
+        int v_bad_msg = 0, j_bad_msg = 0;
         REQUIRE(dia_amf_verify(S_pk, R_sk, J_pk,
                                reinterpret_cast<const unsigned char*>(other.data()), other.size(),
-                               sig_blob, sig_len) != DIA_OK);
+                               sig_blob, sig_len, &v_bad_msg) == DIA_OK);
+        REQUIRE(v_bad_msg == 0);
         REQUIRE(dia_amf_judge(S_pk, R_pk, J_sk,
                               reinterpret_cast<const unsigned char*>(other.data()), other.size(),
-                              sig_blob, sig_len) != DIA_OK);
+                              sig_blob, sig_len, &j_bad_msg) == DIA_OK);
+        REQUIRE(j_bad_msg == 0);
 
         // Negative: wrong sender pk
         unsigned char S2_sk[DIA_FR_LEN], S2_pk[DIA_G1_LEN];
         REQUIRE(dia_amf_keygen(S2_sk, S2_pk) == DIA_OK);
+        int v_bad_s = 0, j_bad_s = 0;
         REQUIRE(dia_amf_verify(S2_pk, R_sk, J_pk,
                                reinterpret_cast<const unsigned char*>(msg.data()), msg.size(),
-                               sig_blob, sig_len) != DIA_OK);
+                               sig_blob, sig_len, &v_bad_s) == DIA_OK);
+        REQUIRE(v_bad_s == 0);
         REQUIRE(dia_amf_judge(S2_pk, R_pk, J_sk,
                               reinterpret_cast<const unsigned char*>(msg.data()), msg.size(),
-                              sig_blob, sig_len) != DIA_OK);
+                              sig_blob, sig_len, &j_bad_s) == DIA_OK);
+        REQUIRE(j_bad_s == 0);
 
         // Negative: wrong receiver secret for Verify (Judge independent)
         unsigned char R2_sk[DIA_FR_LEN], R2_pk[DIA_G1_LEN];
         REQUIRE(dia_amf_keygen(R2_sk, R2_pk) == DIA_OK);
+        int v_bad_r = 0, j_ok_indep = 0;
         REQUIRE(dia_amf_verify(S_pk, R2_sk, J_pk,
                                reinterpret_cast<const unsigned char*>(msg.data()), msg.size(),
-                               sig_blob, sig_len) != DIA_OK);
+                               sig_blob, sig_len, &v_bad_r) == DIA_OK);
+        REQUIRE(v_bad_r == 0);
         REQUIRE(dia_amf_judge(S_pk, R_pk, J_sk,
                               reinterpret_cast<const unsigned char*>(msg.data()), msg.size(),
-                              sig_blob, sig_len) == DIA_OK);
+                              sig_blob, sig_len, &j_ok_indep) == DIA_OK);
+        REQUIRE(j_ok_indep == 1);
 
-        // Tamper the blob (flip one byte) → verify should fail (or parsing should fail)
+        // Tamper the blob (flip one byte) → may parse (invalid) or fail to parse.
         {
             std::vector<unsigned char> tam(sig_blob, sig_blob + sig_len);
             tam[tam.size() / 2] ^= 0x01;
-            REQUIRE(dia_amf_verify(S_pk, R_sk, J_pk,
-                                   reinterpret_cast<const unsigned char*>(msg.data()), msg.size(),
-                                   tam.data(), tam.size()) != DIA_OK);
+            int res = 1; // set to 0 if parsed and invalid
+            int rc = dia_amf_verify(S_pk, R_sk, J_pk,
+                                    reinterpret_cast<const unsigned char*>(msg.data()), msg.size(),
+                                    tam.data(), tam.size(), &res);
+            // Accept either: parsed-but-invalid (DIA_OK & res==0) OR parse error (rc != DIA_OK)
+            bool acceptable = (rc == DIA_OK) ? (res == 0) : (rc != DIA_OK);
+            REQUIRE(acceptable);
         }
+
 
         free_byte_buffer(sig_blob);
     }
@@ -154,16 +175,20 @@ TEST_CASE("C ABI: VOPRF / AMF / BBS smoke tests", "[dia_c]") {
         auto m_ptrs = to_ptrs(msgs);
         auto m_lens = to_lens(msgs);
 
-        // Sign
-        unsigned char A[DIA_G1_LEN], e[DIA_FR_LEN];
+        // Sign -> opaque signature blob
+        unsigned char* sig_blob = nullptr; size_t sig_len = 0;
         REQUIRE(dia_bbs_sign(reinterpret_cast<const unsigned char* const*>(m_ptrs.data()),
                              m_lens.data(), msgs.size(),
-                             sk, A, e) == DIA_OK);
+                             sk, &sig_blob, &sig_len) == DIA_OK);
+        REQUIRE(sig_blob != nullptr);
+        REQUIRE(sig_len > 0);
 
-        // Verify
+        // Verify signature
+        int sig_ok = 0;
         REQUIRE(dia_bbs_verify(reinterpret_cast<const unsigned char* const*>(m_ptrs.data()),
                                m_lens.data(), msgs.size(),
-                               pk, A, e) == DIA_OK);
+                               pk, sig_blob, sig_len, &sig_ok) == DIA_OK);
+        REQUIRE(sig_ok == 1);
 
         // Proof: reveal none (k=0)
         const std::string nonce = "bbs-proof-nonce";
@@ -171,17 +196,19 @@ TEST_CASE("C ABI: VOPRF / AMF / BBS smoke tests", "[dia_c]") {
         REQUIRE(dia_bbs_proof_create(reinterpret_cast<const unsigned char* const*>(m_ptrs.data()),
                                      m_lens.data(), msgs.size(),
                                      nullptr, 0,
-                                     pk, A, e,
+                                     pk, sig_blob, sig_len,
                                      reinterpret_cast<const unsigned char*>(nonce.data()), nonce.size(),
                                      &prf_blob, &prf_len) == DIA_OK);
         REQUIRE(prf_blob != nullptr); REQUIRE(prf_len > 0);
 
         // Verify proof with k=0
+        int prf_ok0 = 0;
         REQUIRE(dia_bbs_proof_verify(nullptr,
                                      nullptr, nullptr, 0,
                                      pk,
                                      reinterpret_cast<const unsigned char*>(nonce.data()), nonce.size(),
-                                     prf_blob, prf_len) == DIA_OK);
+                                     prf_blob, prf_len, &prf_ok0) == DIA_OK);
+        REQUIRE(prf_ok0 == 1);
 
         // Proof: reveal subset {1,3,6} (1-based indices)
         std::vector<size_t> disclose_idx = {1,3,6};
@@ -194,46 +221,56 @@ TEST_CASE("C ABI: VOPRF / AMF / BBS smoke tests", "[dia_c]") {
         REQUIRE(dia_bbs_proof_create(reinterpret_cast<const unsigned char* const*>(m_ptrs.data()),
                                      m_lens.data(), msgs.size(),
                                      disclose_u32.data(), disclose_u32.size(),
-                                     pk, A, e,
+                                     pk, sig_blob, sig_len,
                                      reinterpret_cast<const unsigned char*>(nonce.data()), nonce.size(),
                                      &prf_blob2, &prf_len2) == DIA_OK);
 
+        int prf_ok = 0;
         REQUIRE(dia_bbs_proof_verify(disclose_u32.data(),
                                      reinterpret_cast<const unsigned char* const*>(d_ptrs.data()),
                                      d_lens.data(), disclosed.size(),
                                      pk,
                                      reinterpret_cast<const unsigned char*>(nonce.data()), nonce.size(),
-                                     prf_blob2, prf_len2) == DIA_OK);
+                                     prf_blob2, prf_len2, &prf_ok) == DIA_OK);
+        REQUIRE(prf_ok == 1);
 
-        // Negative: wrong nonce
+        // Negative: wrong nonce → DIA_OK with result=0
         const std::string bad_nonce = "wrong";
+        int prf_bad_nonce = 0;
         REQUIRE(dia_bbs_proof_verify(disclose_u32.data(),
                                      reinterpret_cast<const unsigned char* const*>(d_ptrs.data()),
                                      d_lens.data(), disclosed.size(),
                                      pk,
                                      reinterpret_cast<const unsigned char*>(bad_nonce.data()), bad_nonce.size(),
-                                     prf_blob2, prf_len2) != DIA_OK);
+                                     prf_blob2, prf_len2, &prf_bad_nonce) == DIA_OK);
+        REQUIRE(prf_bad_nonce == 0);
 
-        // Negative: wrong pk
+        // Negative: wrong pk → DIA_OK with result=0
         unsigned char sk2[DIA_FR_LEN], pk2[DIA_G2_LEN];
         REQUIRE(dia_bbs_keygen(sk2, pk2) == DIA_OK);
+        int prf_bad_pk = 0;
         REQUIRE(dia_bbs_proof_verify(disclose_u32.data(),
                                      reinterpret_cast<const unsigned char* const*>(d_ptrs.data()),
                                      d_lens.data(), disclosed.size(),
                                      pk2,
                                      reinterpret_cast<const unsigned char*>(nonce.data()), nonce.size(),
-                                     prf_blob2, prf_len2) != DIA_OK);
+                                     prf_blob2, prf_len2, &prf_bad_pk) == DIA_OK);
+        REQUIRE(prf_bad_pk == 0);
 
-        // Negative: tamper the proof blob (flip byte) → should fail
+        // Negative: tamper the proof blob (flip byte) → may parse (invalid) or fail to parse.
         std::vector<unsigned char> tam(prf_blob2, prf_blob2 + prf_len2);
         tam[tam.size()/3] ^= 0x01;
-        REQUIRE(dia_bbs_proof_verify(disclose_u32.data(),
-                                     reinterpret_cast<const unsigned char* const*>(d_ptrs.data()),
-                                     d_lens.data(), disclosed.size(),
-                                     pk,
-                                     reinterpret_cast<const unsigned char*>(nonce.data()), nonce.size(),
-                                     tam.data(), tam.size()) != DIA_OK);
+        int res = 1; // will be 0 if parsed as invalid
+        int rc = dia_bbs_proof_verify(disclose_u32.data(),
+                                      reinterpret_cast<const unsigned char* const*>(d_ptrs.data()),
+                                      d_lens.data(), disclosed.size(),
+                                      pk,
+                                      reinterpret_cast<const unsigned char*>(nonce.data()), nonce.size(),
+                                      tam.data(), tam.size(), &res);
+        bool acceptable = (rc == DIA_OK) ? (res == 0) : (rc != DIA_OK);
+        REQUIRE(acceptable);
 
+        free_byte_buffer(sig_blob);
         free_byte_buffer(prf_blob);
         free_byte_buffer(prf_blob2);
     }
