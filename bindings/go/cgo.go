@@ -97,28 +97,31 @@ func VOPRFUnblind(element, blind []byte) (Y []byte, err error) {
 }
 
 // VOPRFVerify checks e(H(input), pk) == e(Y, g2).
-func VOPRFVerify(input, Y, pk []byte) error {
+// Returns (valid, error). error is non-nil only for API/parse failures.
+func VOPRFVerify(input, Y, pk []byte) (bool, error) {
 	ensureInit()
 	if len(Y) != G1Len || len(pk) != G2Len {
-		return errors.New("VOPRFVerify: bad input sizes")
+		return false, errors.New("VOPRFVerify: bad input sizes")
 	}
 	var inPtr *C.uchar
 	if len(input) > 0 {
 		inPtr = (*C.uchar)(unsafe.Pointer(&input[0]))
 	}
+	var res C.int
 	rc := C.dia_voprf_verify(inPtr, C.size_t(len(input)),
-		(*C.uchar)(&Y[0]), (*C.uchar)(&pk[0]))
-	return rcErr("dia_voprf_verify", rc)
+		(*C.uchar)(&Y[0]), (*C.uchar)(&pk[0]), &res)
+	return res == 1, rcErr("dia_voprf_verify", rc)
 }
 
 // VOPRFVerifyBatch verifies N inputs with N outputs Y using 2 pairings.
-func VOPRFVerifyBatch(inputs [][]byte, Ys [][]byte, pk []byte) error {
+// Returns (allValid, error).
+func VOPRFVerifyBatch(inputs [][]byte, Ys [][]byte, pk []byte) (bool, error) {
 	ensureInit()
 	if len(pk) != G2Len {
-		return errors.New("VOPRFVerifyBatch: bad pk size")
+		return false, errors.New("VOPRFVerifyBatch: bad pk size")
 	}
 	if len(inputs) != len(Ys) {
-		return errors.New("VOPRFVerifyBatch: len mismatch")
+		return false, errors.New("VOPRFVerifyBatch: len mismatch")
 	}
 	n := len(inputs)
 
@@ -145,19 +148,21 @@ func VOPRFVerifyBatch(inputs [][]byte, Ys [][]byte, pk []byte) error {
 	Ycat := make([]byte, n*G1Len)
 	for i := 0; i < n; i++ {
 		if len(Ys[i]) != G1Len {
-			return errors.New("VOPRFVerifyBatch: bad Y size")
+			return false, errors.New("VOPRFVerifyBatch: bad Y size")
 		}
 		copy(Ycat[i*G1Len:(i+1)*G1Len], Ys[i])
 	}
 
+	var res C.int
 	rc := C.dia_voprf_verify_batch(
 		(**C.uchar)(cPtrs),
 		(*C.size_t)(cLens),
 		C.size_t(n),
 		(*C.uchar)(&Ycat[0]),
 		(*C.uchar)(&pk[0]),
+		&res,
 	)
-	return rcErr("dia_voprf_verify_batch", rc)
+	return res == 1, rcErr("dia_voprf_verify_batch", rc)
 }
 
 /* ================================= AMF ================================= */
@@ -200,44 +205,50 @@ func AMFFrank(skSender, pkReceiver, pkJudge, msg []byte) (sig []byte, err error)
 	return sig, nil
 }
 
-// AMFVerify (receiver) — checks U==sk_r*B and verifies transcripts
-func AMFVerify(pkSender, skReceiver, pkJudge, msg, sig []byte) error {
+// AMFVerify (receiver) — checks U==sk_r*B and verifies transcripts.
+// Returns (valid, error).
+func AMFVerify(pkSender, skReceiver, pkJudge, msg, sig []byte) (bool, error) {
 	ensureInit()
 	if len(pkSender) != G1Len || len(skReceiver) != FrLen || len(pkJudge) != G1Len {
-		return errors.New("AMFVerify: bad key sizes")
+		return false, errors.New("AMFVerify: bad key sizes")
 	}
 	var msgPtr *C.uchar
 	if len(msg) > 0 {
 		msgPtr = (*C.uchar)(unsafe.Pointer(&msg[0]))
 	}
+	var res C.int
 	rc := C.dia_amf_verify(
 		(*C.uchar)(&pkSender[0]),
 		(*C.uchar)(&skReceiver[0]),
 		(*C.uchar)(&pkJudge[0]),
 		msgPtr, C.size_t(len(msg)),
 		(*C.uchar)(unsafe.Pointer(&sig[0])), C.size_t(len(sig)),
+		&res,
 	)
-	return rcErr("dia_amf_verify", rc)
+	return res == 1, rcErr("dia_amf_verify", rc)
 }
 
-// AMFJudge (moderator) — checks T==sk_j*A and verifies transcripts
-func AMFJudge(pkSender, pkReceiver, skJudge, msg, sig []byte) error {
+// AMFJudge (moderator) — checks T==sk_j*A and verifies transcripts.
+// Returns (valid, error).
+func AMFJudge(pkSender, pkReceiver, skJudge, msg, sig []byte) (bool, error) {
 	ensureInit()
 	if len(pkSender) != G1Len || len(pkReceiver) != G1Len || len(skJudge) != FrLen {
-		return errors.New("AMFJudge: bad key sizes")
+		return false, errors.New("AMFJudge: bad key sizes")
 	}
 	var msgPtr *C.uchar
 	if len(msg) > 0 {
 		msgPtr = (*C.uchar)(unsafe.Pointer(&msg[0]))
 	}
+	var res C.int
 	rc := C.dia_amf_judge(
 		(*C.uchar)(&pkSender[0]),
 		(*C.uchar)(&pkReceiver[0]),
 		(*C.uchar)(&skJudge[0]),
 		msgPtr, C.size_t(len(msg)),
 		(*C.uchar)(unsafe.Pointer(&sig[0])), C.size_t(len(sig)),
+		&res,
 	)
-	return rcErr("dia_amf_judge", rc)
+	return res == 1, rcErr("dia_amf_judge", rc)
 }
 
 /* ================================= BBS ================================= */
@@ -251,16 +262,14 @@ func BBSKeygen() (sk []byte, pk []byte, err error) {
 	return sk, pk, rcErr("dia_bbs_keygen", rc)
 }
 
-// BBSSign -> (A G1, e Fr)
-func BBSSign(msgs [][]byte, sk []byte) (A []byte, e []byte, err error) {
+// BBSSign -> opaque signature blob
+func BBSSign(msgs [][]byte, sk []byte) (sig []byte, err error) {
 	ensureInit()
 	if len(sk) != FrLen {
-		return nil, nil, errors.New("BBSSign: bad sk size")
+		return nil, errors.New("BBSSign: bad sk size")
 	}
-	A = make([]byte, G1Len)
-	e = make([]byte, FrLen)
-
 	n := len(msgs)
+
 	// Build C arrays for inputs (pointers+lengths)
 	cPtrs := C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(uintptr(0))))
 	defer C.free(cPtrs)
@@ -280,55 +289,73 @@ func BBSSign(msgs [][]byte, sk []byte) (A []byte, e []byte, err error) {
 		}
 	}
 
+	// Out blob
+	var outPtr *C.uchar
+	var outLen C.size_t
+
 	rc := C.dia_bbs_sign(
 		(**C.uchar)(cPtrs), (*C.size_t)(cLens), C.size_t(n),
 		(*C.uchar)(&sk[0]),
-		(*C.uchar)(&A[0]), (*C.uchar)(&e[0]),
+		(**C.uchar)(unsafe.Pointer(&outPtr)),
+		(*C.size_t)(unsafe.Pointer(&outLen)),
 	)
-	return A, e, rcErr("dia_bbs_sign", rc)
+	if err = rcErr("dia_bbs_sign", rc); err != nil {
+		return nil, err
+	}
+	sig = C.GoBytes(unsafe.Pointer(outPtr), C.int(outLen))
+	C.free_byte_buffer(outPtr)
+	return sig, nil
 }
 
-func BBSVerify(msgs [][]byte, pk, A, e []byte) error {
+// BBSVerify — verify signature over messages with issuer pk.
+// Returns (valid, error).
+func BBSVerify(msgs [][]byte, pk, sig []byte) (bool, error) {
 	ensureInit()
-	if len(pk) != G2Len || len(A) != G1Len || len(e) != FrLen {
-		return errors.New("BBSVerify: bad input sizes")
+	if len(pk) != G2Len {
+		return false, errors.New("BBSVerify: bad pk size")
 	}
 
 	n := len(msgs)
-	cPtrs := C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(uintptr(0))))
-	defer C.free(cPtrs)
-	cLens := C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(C.size_t(0))))
-	defer C.free(cLens)
+	var cPtrs, cLens unsafe.Pointer
+	if n > 0 {
+		cPtrs = C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(uintptr(0))))
+		defer C.free(cPtrs)
+		cLens = C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(C.size_t(0))))
+		defer C.free(cLens)
 
-	ptrs := (*[1 << 30]*C.uchar)(cPtrs)[:n:n]
-	lens := (*[1 << 30]C.size_t)(cLens)[:n:n]
+		ptrs := (*[1 << 30]*C.uchar)(cPtrs)[:n:n]
+		lens := (*[1 << 30]C.size_t)(cLens)[:n:n]
 
-	for i := 0; i < n; i++ {
-		if len(msgs[i]) == 0 {
-			ptrs[i] = nil
-			lens[i] = 0
-		} else {
-			ptrs[i] = (*C.uchar)(unsafe.Pointer(&msgs[i][0]))
-			lens[i] = C.size_t(len(msgs[i]))
+		for i := 0; i < n; i++ {
+			if len(msgs[i]) == 0 {
+				ptrs[i] = nil
+				lens[i] = 0
+			} else {
+				ptrs[i] = (*C.uchar)(unsafe.Pointer(&msgs[i][0]))
+				lens[i] = C.size_t(len(msgs[i]))
+			}
 		}
 	}
 
+	var res C.int
 	rc := C.dia_bbs_verify(
 		(**C.uchar)(cPtrs), (*C.size_t)(cLens), C.size_t(n),
 		(*C.uchar)(&pk[0]),
-		(*C.uchar)(&A[0]), (*C.uchar)(&e[0]),
+		(*C.uchar)(unsafe.Pointer(&sig[0])), C.size_t(len(sig)),
+		&res,
 	)
-	return rcErr("dia_bbs_verify", rc)
+	return res == 1, rcErr("dia_bbs_verify", rc)
 }
 
 // BBSCreateProof → proof blob (opaque) for selective disclosure.
 // discloseIdx: 1-based indices of messages to reveal (can be empty).
+// Requires issuer pk + opaque signature blob (not (A,e)).
 func BBSCreateProof(msgs [][]byte, discloseIdx []uint32,
-	pk, A, e, nonce []byte) (proof []byte, err error) {
+	pk, sig, nonce []byte) (proof []byte, err error) {
 
 	ensureInit()
-	if len(pk) != G2Len || len(A) != G1Len || len(e) != FrLen {
-		return nil, errors.New("BBSCreateProof: bad key sizes")
+	if len(pk) != G2Len {
+		return nil, errors.New("BBSCreateProof: bad pk size")
 	}
 
 	n := len(msgs)
@@ -375,8 +402,7 @@ func BBSCreateProof(msgs [][]byte, discloseIdx []uint32,
 		(**C.uchar)(cPtrs), (*C.size_t)(cLens), C.size_t(n),
 		dPtr, C.size_t(len(discloseIdx)),
 		(*C.uchar)(&pk[0]),
-		(*C.uchar)(&A[0]),
-		(*C.uchar)(&e[0]),
+		(*C.uchar)(unsafe.Pointer(&sig[0])), C.size_t(len(sig)),
 		noncePtr, C.size_t(len(nonce)),
 		(**C.uchar)(unsafe.Pointer(&outPtr)),
 		(*C.size_t)(unsafe.Pointer(&outLen)),
@@ -392,15 +418,16 @@ func BBSCreateProof(msgs [][]byte, discloseIdx []uint32,
 // BBSVerifyProof verifies a selective disclosure proof.
 // disclosedIdx: 1-based indices of disclosed messages (can be empty)
 // disclosedMsgs: must align 1:1 with disclosedIdx (can be empty)
+// Returns (valid, error).
 func BBSVerifyProof(disclosedIdx []uint32, disclosedMsgs [][]byte,
-	pk, nonce, proof []byte) error {
+	pk, nonce, proof []byte) (bool, error) {
 
 	ensureInit()
 	if len(pk) != G2Len {
-		return errors.New("BBSVerifyProof: bad pk size")
+		return false, errors.New("BBSVerifyProof: bad pk size")
 	}
 	if len(disclosedMsgs) != len(disclosedIdx) {
-		return errors.New("BBSVerifyProof: index/msg mismatch")
+		return false, errors.New("BBSVerifyProof: index/msg mismatch")
 	}
 	n := len(disclosedMsgs)
 
@@ -443,12 +470,14 @@ func BBSVerifyProof(disclosedIdx []uint32, disclosedMsgs [][]byte,
 		noncePtr = (*C.uchar)(unsafe.Pointer(&nonce[0]))
 	}
 
+	var res C.int
 	rc := C.dia_bbs_proof_verify(
 		idxPtr,
 		(**C.uchar)(dPtrs), (*C.size_t)(dLens), C.size_t(n),
 		(*C.uchar)(&pk[0]),
 		noncePtr, C.size_t(len(nonce)),
 		(*C.uchar)(unsafe.Pointer(&proof[0])), C.size_t(len(proof)),
+		&res,
 	)
-	return rcErr("dia_bbs_proof_verify", rc)
+	return res == 1, rcErr("dia_bbs_proof_verify", rc)
 }

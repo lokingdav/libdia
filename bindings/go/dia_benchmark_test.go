@@ -35,7 +35,7 @@ func BenchmarkVOPRF_EndToEnd(b *testing.B) {
 	b.ReportAllocs()
 
 	// Setup once
-	_, pk, err := VOPRFKeygen()
+	sk, pk, err := VOPRFKeygen()
 	if err != nil {
 		b.Fatalf("VOPRFKeygen: %v", err)
 	}
@@ -47,11 +47,7 @@ func BenchmarkVOPRF_EndToEnd(b *testing.B) {
 		if err != nil {
 			b.Fatalf("VOPRFBlind: %v", err)
 		}
-		elem, err := VOPRFEvaluate(blinded, /*sk=*/nil) // NOTE: server-side evaluate needs sk; adjust if your API differs
-		_ = elem
-		// If your cgo API requires server secret for evaluate, keep a local sk and pass it here.
-		// The line above is a placeholder—replace with your actual use:
-		// elem, err := VOPRFEvaluate(blinded, sk)
+		elem, err := VOPRFEvaluate(blinded, sk)
 		if err != nil {
 			b.Fatalf("VOPRFEvaluate: %v", err)
 		}
@@ -59,8 +55,12 @@ func BenchmarkVOPRF_EndToEnd(b *testing.B) {
 		if err != nil {
 			b.Fatalf("VOPRFUnblind: %v", err)
 		}
-		if err := VOPRFVerify(in, Y, pk); err != nil {
+		ok, err := VOPRFVerify(in, Y, pk)
+		if err != nil {
 			b.Fatalf("VOPRFVerify: %v", err)
+		}
+		if !ok {
+			b.Fatalf("VOPRFVerify: expected valid")
 		}
 	}
 }
@@ -95,8 +95,12 @@ func BenchmarkVOPRF_VerifyBatch_16(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := VOPRFVerifyBatch(inputs, Ys, pk); err != nil {
+		ok, err := VOPRFVerifyBatch(inputs, Ys, pk)
+		if err != nil {
 			b.Fatalf("VOPRFVerifyBatch: %v", err)
+		}
+		if !ok {
+			b.Fatalf("VOPRFVerifyBatch: expected all valid")
 		}
 	}
 }
@@ -162,8 +166,12 @@ func BenchmarkAMF_Verify(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := AMFVerify(Spk, Rsk, Jpk, msg, sig); err != nil {
+		ok, err := AMFVerify(Spk, Rsk, Jpk, msg, sig)
+		if err != nil {
 			b.Fatalf("AMFVerify: %v", err)
+		}
+		if !ok {
+			b.Fatalf("AMFVerify: expected valid")
 		}
 	}
 }
@@ -192,8 +200,12 @@ func BenchmarkAMF_Judge(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := AMFJudge(Spk, Rpk, Jsk, msg, sig); err != nil {
+		ok, err := AMFJudge(Spk, Rpk, Jsk, msg, sig)
+		if err != nil {
 			b.Fatalf("AMFJudge: %v", err)
+		}
+		if !ok {
+			b.Fatalf("AMFJudge: expected valid")
 		}
 	}
 }
@@ -229,7 +241,7 @@ func BenchmarkBBS_Sign_L8(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, _, err := BBSSign(msgs, sk); err != nil {
+		if _, err := BBSSign(msgs, sk); err != nil {
 			b.Fatalf("BBSSign: %v", err)
 		}
 	}
@@ -244,15 +256,19 @@ func BenchmarkBBS_Verify_L8(b *testing.B) {
 		b.Fatalf("BBSKeygen: %v", err)
 	}
 	msgs := benchMsgs(8)
-	A, e, err := BBSSign(msgs, sk)
+	sig, err := BBSSign(msgs, sk)
 	if err != nil {
 		b.Fatalf("BBSSign: %v", err)
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := BBSVerify(msgs, pk, A, e); err != nil {
+		ok, err := BBSVerify(msgs, pk, sig)
+		if err != nil {
 			b.Fatalf("BBSVerify: %v", err)
+		}
+		if !ok {
+			b.Fatalf("BBSVerify: expected valid")
 		}
 	}
 }
@@ -266,7 +282,7 @@ func BenchmarkBBS_ProofCreate_k0_L8(b *testing.B) {
 		b.Fatalf("BBSKeygen: %v", err)
 	}
 	msgs := benchMsgs(8)
-	A, e, err := BBSSign(msgs, sk)
+	sig, err := BBSSign(msgs, sk)
 	if err != nil {
 		b.Fatalf("BBSSign: %v", err)
 	}
@@ -274,7 +290,7 @@ func BenchmarkBBS_ProofCreate_k0_L8(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := BBSCreateProof(msgs, nil, pk, A, e, nonce); err != nil {
+		if _, err := BBSCreateProof(msgs, nil, pk, sig, nonce); err != nil {
 			b.Fatalf("BBSCreateProof k=0: %v", err)
 		}
 	}
@@ -289,20 +305,24 @@ func BenchmarkBBS_ProofVerify_k0_L8(b *testing.B) {
 		b.Fatalf("BBSKeygen: %v", err)
 	}
 	msgs := benchMsgs(8)
-	A, e, err := BBSSign(msgs, sk)
+	sig, err := BBSSign(msgs, sk)
 	if err != nil {
 		b.Fatalf("BBSSign: %v", err)
 	}
 	nonce := s2b("bbs-proof-nonce")
-	proof, err := BBSCreateProof(msgs, nil, pk, A, e, nonce)
+	proof, err := BBSCreateProof(msgs, nil, pk, sig, nonce)
 	if err != nil {
 		b.Fatalf("BBSCreateProof k=0: %v", err)
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := BBSVerifyProof(nil, nil, pk, nonce, proof); err != nil {
+		ok, err := BBSVerifyProof(nil, nil, pk, nonce, proof)
+		if err != nil {
 			b.Fatalf("BBSVerifyProof k=0: %v", err)
+		}
+		if !ok {
+			b.Fatalf("BBSVerifyProof k=0: expected valid")
 		}
 	}
 }
@@ -316,7 +336,7 @@ func BenchmarkBBS_ProofCreate_kHalf_L8(b *testing.B) {
 		b.Fatalf("BBSKeygen: %v", err)
 	}
 	msgs := benchMsgs(8)
-	A, e, err := BBSSign(msgs, sk)
+	sig, err := BBSSign(msgs, sk)
 	if err != nil {
 		b.Fatalf("BBSSign: %v", err)
 	}
@@ -327,7 +347,7 @@ func BenchmarkBBS_ProofCreate_kHalf_L8(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := BBSCreateProof(msgs, disclose, pk, A, e, nonce); err != nil {
+		if _, err := BBSCreateProof(msgs, disclose, pk, sig, nonce); err != nil {
 			b.Fatalf("BBSCreateProof k=L/2: %v", err)
 		}
 	}
@@ -342,14 +362,14 @@ func BenchmarkBBS_ProofVerify_kHalf_L8(b *testing.B) {
 		b.Fatalf("BBSKeygen: %v", err)
 	}
 	msgs := benchMsgs(8)
-	A, e, err := BBSSign(msgs, sk)
+	sig, err := BBSSign(msgs, sk)
 	if err != nil {
 		b.Fatalf("BBSSign: %v", err)
 	}
 	nonce := s2b("bbs-proof-nonce")
 	disclose := []uint32{1, 3, 5, 7}
 
-	proof, err := BBSCreateProof(msgs, disclose, pk, A, e, nonce)
+	proof, err := BBSCreateProof(msgs, disclose, pk, sig, nonce)
 	if err != nil {
 		b.Fatalf("BBSCreateProof k=L/2: %v", err)
 	}
@@ -365,8 +385,12 @@ func BenchmarkBBS_ProofVerify_kHalf_L8(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := BBSVerifyProof(disclose, disclosed, pk, nonce, proof); err != nil {
+		ok, err := BBSVerifyProof(disclose, disclosed, pk, nonce, proof)
+		if err != nil {
 			b.Fatalf("BBSVerifyProof k=L/2: %v", err)
+		}
+		if !ok {
+			b.Fatalf("BBSVerifyProof k=L/2: expected valid")
 		}
 	}
 }
