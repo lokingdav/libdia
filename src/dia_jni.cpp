@@ -335,39 +335,38 @@ static jobjectArray native_bbsKeygen(JNIEnv* env, jclass) {
     return out;
 }
 
-// BBSSign -> returns [[B] of length 2: {A (G1), e (Fr)}
-static jobjectArray native_bbsSign(JNIEnv* env, jclass, jobjectArray msgs, jbyteArray sk) {
+/* Returns opaque signature blob as byte[] */
+static jbyteArray native_bbsSign(JNIEnv* env, jclass, jobjectArray msgs, jbyteArray sk) {
     if (!checkLen(env, sk, DIA_FR_LEN, "sk")) return nullptr;
 
     CArrayBytes M = toCArrayBytes(env, msgs);
     auto S = getBytes(env, sk);
 
-    unsigned char A[DIA_G1_LEN], e[DIA_FR_LEN];
+    unsigned char* sig_blob = nullptr;
+    size_t sig_blob_len = 0;
+
     int rc = dia_bbs_sign(
         (const unsigned char* const*)M.ptrs.data(),
         M.lens.data(),
         M.ptrs.size(),
         S.data(),
-        A, e
+        &sig_blob,
+        &sig_blob_len
     );
     if (!rcIsOk(env, "dia_bbs_sign", rc)) return nullptr;
 
-    jobjectArray out = make2DByteArray(env, 2);
-    set2DByteArrayElem(env, out, 0, A, DIA_G1_LEN);
-    set2DByteArrayElem(env, out, 1, e, DIA_FR_LEN);
+    jbyteArray out = makeByteArray(env, sig_blob, sig_blob_len);
+    free_byte_buffer(sig_blob);
     return out;
 }
 
 static jboolean native_bbsVerify(JNIEnv* env, jclass,
-                                 jobjectArray msgs, jbyteArray pk, jbyteArray A, jbyteArray e_) {
+                                 jobjectArray msgs, jbyteArray pk, jbyteArray sigBlob) {
     if (!checkLen(env, pk, DIA_G2_LEN, "pk")) return JNI_FALSE;
-    if (!checkLen(env, A,  DIA_G1_LEN, "A"))  return JNI_FALSE;
-    if (!checkLen(env, e_, DIA_FR_LEN, "e"))  return JNI_FALSE;
 
     CArrayBytes M = toCArrayBytes(env, msgs);
-    auto Pk = getBytes(env, pk);
-    auto Aa = getBytes(env, A);
-    auto Ee = getBytes(env, e_);
+    auto Pk  = getBytes(env, pk);
+    auto Sig = getBytes(env, sigBlob);
 
     int valid = 0;
     if (!rcIsOk(env, "dia_bbs_verify",
@@ -376,8 +375,8 @@ static jboolean native_bbsVerify(JNIEnv* env, jclass,
                     M.lens.data(),
                     M.ptrs.size(),
                     Pk.data(),
-                    Aa.data(),
-                    Ee.data(),
+                    Sig.data(),
+                    Sig.size(),
                     &valid))) {
         return JNI_FALSE;
     }
@@ -386,20 +385,17 @@ static jboolean native_bbsVerify(JNIEnv* env, jclass,
 
 static jbyteArray native_bbsCreateProof(JNIEnv* env, jclass,
                                         jobjectArray msgs, jintArray discloseIdx1b,
-                                        jbyteArray pk, jbyteArray A, jbyteArray e, jbyteArray nonce) {
+                                        jbyteArray pk, jbyteArray sigBlob, jbyteArray nonce) {
     if (!checkLen(env, pk, DIA_G2_LEN, "pk")) return nullptr;
-    if (!checkLen(env, A,  DIA_G1_LEN, "A"))  return nullptr;
-    if (!checkLen(env, e,  DIA_FR_LEN, "e"))  return nullptr;
 
     CArrayBytes M = toCArrayBytes(env, msgs);
     auto idx = toU32(env, discloseIdx1b);
-    auto Pk = getBytes(env, pk);
-    auto Aa = getBytes(env, A);
-    auto Ee = getBytes(env, e);
-    auto N  = getBytes(env, nonce);
+    auto Pk  = getBytes(env, pk);
+    auto Sig = getBytes(env, sigBlob);
+    auto N   = getBytes(env, nonce);
 
-    unsigned char* blob = nullptr;
-    size_t blob_len = 0;
+    unsigned char* proof_blob = nullptr;
+    size_t proof_blob_len = 0;
 
     int rc = dia_bbs_proof_create(
         (const unsigned char* const*)M.ptrs.data(),
@@ -408,15 +404,15 @@ static jbyteArray native_bbsCreateProof(JNIEnv* env, jclass,
         idx.empty() ? nullptr : idx.data(),
         idx.size(),
         Pk.data(),
-        Aa.data(),
-        Ee.data(),
+        Sig.data(),
+        Sig.size(),
         N.data(), N.size(),
-        &blob, &blob_len
+        &proof_blob, &proof_blob_len
     );
     if (!rcIsOk(env, "dia_bbs_proof_create", rc)) return nullptr;
 
-    jbyteArray out = makeByteArray(env, blob, blob_len);
-    free_byte_buffer(blob);
+    jbyteArray out = makeByteArray(env, proof_blob, proof_blob_len);
+    free_byte_buffer(proof_blob);
     return out;
 }
 
@@ -473,11 +469,11 @@ static JNINativeMethod gMethods[] = {
     { "amfVerify",        "([B[B[B[B[B)Z",                  (void*)native_amfVerify },
     { "amfJudge",         "([B[B[B[B[B)Z",                  (void*)native_amfJudge },
 
-    // BBS
+    // BBS (updated to opaque blobs)
     { "bbsKeygen",        "()[[B",                          (void*)native_bbsKeygen },
-    { "bbsSign",          "([[B[B)[[B",                     (void*)native_bbsSign },
-    { "bbsVerify",        "([[B[B[B[B)Z",                   (void*)native_bbsVerify },
-    { "bbsCreateProof",   "([[B[I[B[B[B[B)[B",              (void*)native_bbsCreateProof },
+    { "bbsSign",          "([[B[B)[B",                      (void*)native_bbsSign },          // returns blob
+    { "bbsVerify",        "([[B[B[B)Z",                     (void*)native_bbsVerify },        // uses blob
+    { "bbsCreateProof",   "([[B[I[B[B[B)[B",                (void*)native_bbsCreateProof },   // uses blob
     { "bbsVerifyProof",   "([I[[B[B[B[B)Z",                 (void*)native_bbsVerifyProof },
 };
 
