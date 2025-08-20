@@ -12,7 +12,7 @@ if [[ ! " ${AllowedABIs[*]} " =~ " ${ABI} " ]]; then
   exit 1
 fi
 
-DN="build-android-$ABI"
+DN="bindings/android/builds/$ABI"
 rm -rf "$DN"
 mkdir -p "$DN"
 cd "$DN"
@@ -38,6 +38,6 @@ cmake -G Ninja \
   -DBUILD_DIA_TESTING=OFF \
   -DBUILD_DIA_BENCHMARK=OFF \
   -DMCL_TEST_WITH_GMP=OFF \
-  ..
+  ../../../..
 
 ninja
