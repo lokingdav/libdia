@@ -15,19 +15,19 @@ This document explains how to **build** the native libraries (`.so`) for Android
   export ANDROID_NDK_HOME=/path/to/Android/Sdk/ndk/27.x.y
 ````
 
-* **CMake** (comes with Android Studio).
+* **CMake**.
 * Optional: **Ninja** (faster builds, otherwise Makefiles are used).
 
 ---
 
 ## Build outputs
 
-The build artifacts are placed under:
+Build artifacts are placed under:
 
 ```
 bindings/android/builds/<ABI>/
-  ├── src/       # libdia_jni.so sometimes here
-  ├── lib/       # libmcl.so / libmcl.a and other libs
+  ├── src/       # sometimes libdia_jni.so ends up here
+  ├── lib/       # libmcl.so / libmcl.a and other static libs
   └── jniLibs/   # staged .so’s ready to copy into your app or AAR
 ```
 
@@ -43,7 +43,7 @@ From the repo root:
 # Default ABI = arm64-v8a
 ./bindings/android/build.sh
 
-# Or specify ABI explicitly (May fail for x86_64. only tested for arm64-v8a)
+# Or specify ABI explicitly (tested for arm64-v8a; x86_64 may fail)
 ./bindings/android/build.sh x86_64
 ```
 
@@ -51,7 +51,7 @@ The script:
 
 1. Configures CMake with the Android toolchain.
 2. Builds `libdia_jni.so` and dependencies (MCL, DIA core).
-3. Stages the required `.so` files into `jniLibs`.
+3. Stages required `.so` files into `jniLibs/`.
 
 ---
 
@@ -73,7 +73,7 @@ bindings/android/builds/<ABI>/jniLibs/
 
 ```
 app/src/main/jniLibs/arm64-v8a/libdia_jni.so
-app/src/main/jniLibs/arm64-v8a/libmcl.so     # if required
+app/src/main/jniLibs/arm64-v8a/libmcl.so
 ```
 
 2. Restrict ABIs in `app/build.gradle.kts`:
@@ -99,7 +99,8 @@ object LibDia {
 }
 ```
 
-Or simply use the bindings defined in ```android/LibDia.kt```
+Or use the prewritten bindings in `android/LibDia.kt`.
+
 ---
 
 ## Build and publish an AAR
@@ -150,7 +151,8 @@ afterEvaluate {
 ./gradlew :libdia:assembleRelease
 ```
 
-Result: `libdia-release.aar`.
+Result:
+`libdia/build/outputs/aar/libdia-release.aar`.
 
 ---
 
@@ -177,9 +179,10 @@ readelf -d bindings/android/builds/arm64-v8a/jniLibs/libdia_jni.so | grep NEEDED
   Bundle the C++ shared runtime or rebuild with static STL.
 
 * **ABI mismatch**
-  Match your `abiFilters` with built ABIs.
+  Match your `abiFilters` with the built ABIs.
 
 * **JNI class not found**
-  Keep class name: `io/github/lokingdav/libdia/LibDia`.
+  Ensure class name = `io/github/lokingdav/libdia/LibDia`.
 
 ---
+
