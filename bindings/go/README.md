@@ -1,129 +1,140 @@
-# BBS04 Group Signature Go Bindings
+# Go bindings for `libdia`
 
-This directory contains the Go bindings for the BBS04 C++ library (with C wrapper) supporting group signatures. It uses cgo and pkg-config to link against the installed C library.
-
----
-
-## Table of Contents
-
-1. [Prerequisites](#prerequisites)
-2. [Building & Installing the C Library](#building--installing-the-c-library)
-3. [Setting Up Go Bindings](#setting-up-go-bindings)
-4. [Usage Example](#usage-example)
-5. [Running Tests and Benchmarks](#running-tests-and-benchmarks)
-6. [Troubleshooting](#troubleshooting)
-7. [License](#license)
+This document explains how to **build** and **use** the Go bindings for `libdia`, plus how to run tests/benchmarks.
 
 ---
 
 ## Prerequisites
 
-Before installing the Go bindings, ensure you have the following tools installed and available in your `PATH`:
+- **Go** 1.20+ (cgo enabled)
+- **CMake** and a **C++17** compiler (Clang or GCC)
+- **pkg-config** (used to locate headers/libs via `dia.pc`)
 
-* **Go** (any version with module support, e.g., 1.16+)
-* **CMake** (version ≥ 3.15)
-* **pkg-config**
-* A C/C++ compiler toolchain (e.g., `gcc`/`g++` or `clang`)
-* **MCL** library and headers (pairing-friendly elliptic curve library). See [MCL repository](https://github.com/herumi/mcl)
+> cgo must be enabled (it is by default on Linux/macOS). For cross‑builds set `CGO_ENABLED=1` and ensure a working C/C++ toolchain for your target.
 
-## Building & Installing the C Library
+---
 
-1. **Clone the repository** (if you haven’t already):
+## Build & Install `libdia` (once)
 
-   ```bash
-   git clone https://github.com/dense-identity/bbsgroupsig.git
-   cd bbsgroupsig
-   ```
-
-2. **Build and install** the library and headers:
-    Run the script located in `bindings/install.sh` script to build and install the C library:
-    ```bash
-    ./bindings/install.sh
-    ```
-
-   By default, this installs to `/usr/`. To change the install location, pass `-DCMAKE_INSTALL_PREFIX=/your/path` to the `cmake` command in `install.sh`.
-
-4. **Verify** the pkg-config file is available:
-
-   ```bash
-   pkg-config --modversion bbsgs
-   ```
-
-   You should see the version number (e.g., `1.0.0`). If not, ensure `PKG_CONFIG_PATH` includes the directory where `bbsgs.pc` was installed (e.g., `/usr/lib/pkgconfig`).
-
-## Running Tests and Benchmarks
-
-From the `bindings/go` directory:
-
-* **Unit tests**:
-
-  ```bash
-  go test ./...
-  ```
-
-* **Benchmarks**:
-
-  ```bash
-  go test -bench=. -benchmem
-  ```
-
-## Using Go Bindings
-
-Add the binding as a dependency** in your project:
+From the repo root, run the installer (builds C/C++ and installs headers, libs, and `dia.pc`):
 
 ```bash
-go get github.com/dense-identity/bbsgroupsig/bindings/go@latest
+./bindings/install.sh
+````
+
+* Default install prefix is **`/usr`** (so headers go to `/usr/include/dia/…`, libs to `/usr/lib{,64}`, and `dia.pc` to `/usr/lib{,64}/pkgconfig`).
+* To change the prefix, edit the CMake line in `bindings/install.sh` and add:
+
+  ```
+  -DCMAKE_INSTALL_PREFIX=/your/prefix
+  ```
+
+### Verify pkg-config
+
+```bash
+pkg-config --modversion dia
+pkg-config --cflags --libs dia
 ```
 
-## Usage Example
+* Expect a version (e.g. `1.0.0`) and valid flags.
+* If `dia.pc` isn’t found, ensure `PKG_CONFIG_PATH` includes the install location, e.g.:
+
+  * Linux: `export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/lib/pkgconfig`
+  * macOS: `export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/opt/homebrew/lib/pkgconfig`
+
+> **Runtime note (shared linking):** If `libdia.so`/`libmcl.so` are installed to a non‑standard path, set:
+>
+> * Linux: `export LD_LIBRARY_PATH=/your/prefix/lib:$LD_LIBRARY_PATH`
+> * macOS: `export DYLD_LIBRARY_PATH=/your/prefix/lib:$DYLD_LIBRARY_PATH`
+
+---
+
+## Using the Go bindings
+
+The Go package relies on `pkg-config: dia` to provide include/lib paths—so no manual `CGO_CFLAGS`/`CGO_LDFLAGS` are needed if `dia.pc` is visible.
+
+### Add the dependency
+
+```bash
+# from your module
+go get github.com/lokingdav/libdia/bindings/go
+```
+
+> The package name is `dia`.
+
+### Example
 
 ```go
 package main
 
 import (
-    "fmt"
-    "github.com/dense-identity/bbsgroupsig/bindings/go"
+	"fmt"
+	"github.com/lokingdav/libdia/bindings/go"
 )
 
 func main() {
-    // Initialize pairing (must be called once)
-    bbsgs.InitPairing()
-
-    // 1. Generate keys
-    gpk, osk, isk, err := bbsgs.Setup()
-    if err != nil {
-        panic(err)
-    }
-
-    // 2. Create a user secret key
-    usk, err := bbsgs.UserKeygen(gpk, isk)
-    if err != nil {
-        panic(err)
-    }
-
-    // 3. Sign a message
-    msg := []byte("Hello, BBS04!")
-    sig, err := bbsgs.Sign(gpk, usk, msg)
-    if err != nil {
-        panic(err)
-    }
-
-    // 4. Verify
-    valid := bbsgs.Verify(gpk, sig, msg)
-    fmt.Printf("Signature valid? %v\n", valid)
-
-    // 5. Open the signature
-    credA, err := bbsgs.Open(gpk, osk, sig)
-    if err != nil {
-        panic(err)
-    }
-    fmt.Printf("Revealed credential A length: %d bytes\n", len(credA))
+	sk, pk := libdia.DhKeygen()
+	fmt.Printf("sk: %x\n", sk)
+	fmt.Printf("pk: %x\n", pk)
 }
 ```
 
-## Troubleshooting
+Build/run:
 
-* **`pkg-config` not found**: ensure `pkg-config` is installed (`sudo apt install pkg-config` or `brew install pkg-config`).
-* **Cannot find libraries**: confirm that `bbsgs.pc` is in your `PKG_CONFIG_PATH` and libraries are under the matching `libdir`.
-* **cgo errors**: run `go env CGO_ENABLED` and ensure it prints `1`.
+```bash
+go run .
+```
 
+---
+
+## Running Tests and Benchmarks
+
+From the Go bindings directory:
+
+```bash
+cd bindings/go
+
+# Unit tests
+go test ./...
+
+# Benchmarks
+go test -bench=. -benchmem
+```
+
+> These assume `pkg-config dia` resolves correctly and that the shared libs are on your runtime library path if you installed them outside system default locations.
+
+---
+
+## Tips & Troubleshooting
+
+* **`pkg-config: exec: "pkg-config": executable file not found`**
+  Install `pkg-config` and ensure it’s on your `PATH`.
+
+* **`Package dia was not found in the pkg-config search path`**
+  Set `PKG_CONFIG_PATH` to include your install prefix (where `dia.pc` lives).
+
+* **`ld: cannot find -ldia` or runtime `…: cannot open shared object file`**
+  Ensure you installed `libdia` and set `LD_LIBRARY_PATH`/`DYLD_LIBRARY_PATH` for non‑system locations.
+  To prefer static linking with pkg-config:
+
+  ```bash
+  export PKG_CONFIG="pkg-config --static"
+  ```
+
+* **Cross‑compiling**
+  You need a cross C/C++ toolchain that can build `libdia` for the target first, then point `pkg-config` to that sysroot/prefix when building your Go app with `GOOS/GOARCH` and `CGO_ENABLED=1`.
+
+* **API surface**
+  See `bindings/go/libdia.go` for exported functions. Extend it as needed by adding cgo wrappers.
+
+---
+
+## What gets installed
+
+* Headers: `include/dia/*.h`
+* Libraries: `lib/libdia.{a,so}` (and its deps, e.g., `libmcl`)
+* pkg-config: `lib/pkgconfig/dia.pc`
+
+With `dia.pc` in place, the Go bindings “just work” via cgo + pkg-config.
+
+---
