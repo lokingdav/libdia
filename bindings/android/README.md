@@ -9,11 +9,11 @@ This document explains how to **build** the native libraries (`.so`) for Android
 - **Android NDK** r26+ (tested with r27).  
   Set one of these before building:
 
-  ```bash
+```bash
   export ANDROID_NDK_ROOT=/path/to/Android/Sdk/ndk/27.x.y
   # or
   export ANDROID_NDK_HOME=/path/to/Android/Sdk/ndk/27.x.y
-````
+```
 
 * **CMake**.
 * Optional: **Ninja** (faster builds, otherwise Makefiles are used).
