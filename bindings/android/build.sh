@@ -17,20 +17,27 @@ rm -rf "$DN"
 mkdir -p "$DN"
 cd "$DN"
 
-# Prefer ANDROID_NDK_ROOT if set, else try common defaults
-ANDROID_NDK_ROOT="${ANDROID_NDK_ROOT:-${ANDROID_NDK_HOME:-$HOME/Library/Android/sdk/ndk/27.0.12077973}}"
-if [[ ! -d "$ANDROID_NDK_ROOT" ]]; then
-  echo "Error: ANDROID_NDK_ROOT not found at: $ANDROID_NDK_ROOT"
-  echo "Set ANDROID_NDK_ROOT (or ANDROID_NDK_HOME) to your NDK path."
+# Require either ANDROID_NDK_ROOT or ANDROID_NDK_HOME
+if [[ -n "${ANDROID_NDK_ROOT:-}" ]]; then
+  NDK_PATH="$ANDROID_NDK_ROOT"
+elif [[ -n "${ANDROID_NDK_HOME:-}" ]]; then
+  NDK_PATH="$ANDROID_NDK_HOME"
+else
+  echo "Error: ANDROID_NDK_ROOT or ANDROID_NDK_HOME must be set."
+  echo "Please export one of them to your Android NDK path (e.g., \$HOME/Android/Sdk/ndk/27.x.y)."
   exit 1
 fi
-export ANDROID_NDK_ROOT
 
-echo "Building for ABI=$ABI with NDK at $ANDROID_NDK_ROOT"
+if [[ ! -d "$NDK_PATH" ]]; then
+  echo "Error: NDK path does not exist: $NDK_PATH"
+  exit 1
+fi
+
+echo "Building for ABI=$ABI with NDK at $NDK_PATH"
 
 # Configure + build
-cmake -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake" \
+cmake \
+  -DCMAKE_TOOLCHAIN_FILE="$NDK_PATH/build/cmake/android.toolchain.cmake" \
   -DANDROID_ABI="$ABI" \
   -DANDROID_PLATFORM=android-24 \
   -DCMAKE_BUILD_TYPE=Release \
@@ -40,4 +47,4 @@ cmake -G Ninja \
   -DMCL_TEST_WITH_GMP=OFF \
   ../../../..
 
-ninja
+cmake --build . --config Release -j
