@@ -51,7 +51,7 @@ The script:
 
 1. Configures CMake with the Android toolchain.
 2. Builds `libdia_jni.so` and dependencies (MCL, DIA core).
-3. Stages required `.so` files into `jniLibs/`.
+3. Stages required `.so` files into `jniLibs/<ABI>/`.
 
 ---
 
@@ -60,7 +60,7 @@ The script:
 After build, you should have:
 
 ```
-bindings/android/builds/<ABI>/jniLibs/
+bindings/android/builds/<ABI>/jniLibs/<ABI>
   libdia_jni.so
   libmcl.so
 ```

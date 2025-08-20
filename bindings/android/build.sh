@@ -45,7 +45,7 @@ cmake \
 cmake --build . --config Release -j
 
 # ================== Stage JNI libs into $DN/jniLibs ==================
-STAGE_DIR="jniLibs"
+STAGE_DIR="jniLibs/$ABI"
 mkdir -p "$STAGE_DIR"
 
 # Helper: copy first existing match
