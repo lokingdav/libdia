@@ -20,6 +20,27 @@ func clone2D(in [][]byte) [][]byte {
 	return out
 }
 
+// =============================== DH ===================================
+func BenchmarkDH_Keygen(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if _, _, err := DHKeygen(); err != nil {
+			b.Fatalf("DHKeygen: %v", err)
+		}
+	}
+}
+
+func BenchmarkDH_ComputeSecret(b *testing.B) {
+	b.ReportAllocs()
+	a, A, _ := DHKeygen()
+
+	for i := 0; i < b.N; i++ {
+		if _, err := DHComputeSecret(a, A); err != nil {
+			b.Fatalf("DHComputeSecret: %v", err)
+		}
+	}
+}
+
 // =============================== VOPRF ===================================
 
 func BenchmarkVOPRF_Keygen(b *testing.B) {

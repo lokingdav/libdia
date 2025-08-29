@@ -7,6 +7,34 @@ import (
 
 func s2b(s string) []byte { return []byte(s) }
 
+// ------------------------------- DH --------------------------------
+func TestDH_EndToEnd(t *testing.T) {
+	a, A, err := DHKeygen()
+	if err != nil {
+		t.Fatalf("DHKeygen for (a, A): %v", err)
+	}
+	b, B, err := DHKeygen()
+	if err != nil {
+		t.Fatalf("DHKeygen for (b, B): %v", err)
+	}
+
+	sec1, err := DHComputeSecret(a, B)
+	if err != nil {
+		t.Fatalf("DHComputeSecret: %v", err)
+	}
+
+	sec2, err := DHComputeSecret(b, A)
+	if err != nil {
+		t.Fatalf("DHComputeSecret: %v", err)
+	}
+
+	for i := range sec1 {
+		if sec1[i] != sec2[i] {
+			t.Fatalf("Computed secrets do not match")
+		}
+	}
+}
+
 // ------------------------------- VOPRF --------------------------------
 
 func TestVOPRF_EndToEnd(t *testing.T) {

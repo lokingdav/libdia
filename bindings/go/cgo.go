@@ -47,6 +47,29 @@ func rcErr(op string, rc C.int) error {
 	return fmt.Errorf("%s failed: rc=%d", op, int(rc))
 }
 
+/* ================================ Diffie Helman ================================ */
+
+// DHKeygen -> (sk Fr, pk G1)
+func DHKeygen() (a []byte, A []byte, err error) {
+	ensureInit()
+	a = make([]byte, FrLen)
+	A = make([]byte, G1Len)
+	rc := C.dia_dh_keygen((*C.uchar)(&a[0]), (*C.uchar)(&A[0]))
+	return a, A, rcErr("dia_dh_keygen", rc)
+}
+
+// DHComputeSecret -> element G1
+func DHComputeSecret(a, B []byte) (secret []byte, err error) {
+	ensureInit()
+	if len(B) != G1Len || len(a) != FrLen {
+		return nil, errors.New("DHComputeSecret: bad input sizes")
+	}
+	secret = make([]byte, G1Len)
+	rc := C.dia_dh_compute_secret((*C.uchar)(&secret[0]), (*C.uchar)(&a[0]),
+		(*C.uchar)(&B[0]))
+	return secret, rcErr("dia_dh_compute_secret", rc)
+}
+
 /* ================================ VOPRF ================================ */
 
 // VOPRFKeygen -> (sk Fr, pk G2)
