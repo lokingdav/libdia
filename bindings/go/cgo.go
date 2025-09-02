@@ -65,8 +65,8 @@ func DHComputeSecret(a, B []byte) (secret []byte, err error) {
 		return nil, errors.New("DHComputeSecret: bad input sizes")
 	}
 	secret = make([]byte, G1Len)
-	rc := C.dia_dh_compute_secret((*C.uchar)(&secret[0]), (*C.uchar)(&a[0]),
-		(*C.uchar)(&B[0]))
+	rc := C.dia_dh_compute_secret((*C.uchar)(&a[0]), (*C.uchar)(&B[0]),
+		(*C.uchar)(&secret[0]))
 	return secret, rcErr("dia_dh_compute_secret", rc)
 }
 
