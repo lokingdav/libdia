@@ -19,6 +19,7 @@ Bytes Rtu::serialize() const {
     append_lp(out, expiration);
     append_lp(out, signature);
     append_lp(out, to_bytes(name));
+    append_lp(out, to_bytes(logo));
     append_lp(out, pke_pk);
     append_lp(out, dr_pk);
     return out;
@@ -31,6 +32,7 @@ Rtu Rtu::deserialize(const Bytes& data) {
     rtu.expiration = read_lp(data, off);
     rtu.signature  = read_lp(data, off);
     rtu.name       = read_string(data, off);
+    rtu.logo       = read_string(data, off);
     rtu.pke_pk     = read_lp(data, off);
     rtu.dr_pk      = read_lp(data, off);
     return rtu;

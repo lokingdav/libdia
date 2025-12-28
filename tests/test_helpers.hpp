@@ -148,7 +148,7 @@ inline TestClientConfig create_client_config(
     // Build ClientConfig
     tc.config.my_phone = phone;
     tc.config.my_name = name;
-    tc.config.my_logo = "";
+    tc.config.my_logo = "https://example.com/logo/" + phone + ".png";
     
     tc.config.ra_public_key = tc.ra_keypair.pk.to_bytes();
     tc.config.amf_private_key = tc.amf_keypair.sk.to_bytes();

@@ -76,6 +76,17 @@ struct RuaState {
 };
 
 // -----------------------------------------------------------------------------
+// RemotePartyInfo - Visible information about the remote call party
+// Populated after RUA completes with verified RTU data
+// -----------------------------------------------------------------------------
+struct RemotePartyInfo {
+    std::string phone;   // Remote party's phone number
+    std::string name;    // Remote party's verified display name
+    std::string logo;    // Remote party's logo (URL or base64)
+    bool verified = false; // True if RTU was verified successfully
+};
+
+// -----------------------------------------------------------------------------
 // CallState - Main state container for a call session
 // -----------------------------------------------------------------------------
 class CallState {
@@ -115,6 +126,7 @@ public:
     Bytes       counterpart_dr_pk;
     AkeState    ake;
     RuaState    rua;
+    RemotePartyInfo remote_party;  // Visible info about remote party after RUA
     ClientConfig config;
     
     // Double Ratchet session (initialized after AKE completes)

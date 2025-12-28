@@ -19,6 +19,7 @@ Rtu create_rtu_from_config(const ClientConfig& cfg) {
     rtu.expiration = cfg.en_expiration;
     rtu.signature = cfg.ra_signature;
     rtu.name = cfg.my_name;
+    rtu.logo = cfg.my_logo;
     return rtu;
 }
 
@@ -284,6 +285,12 @@ Bytes rua_response(CallState& recipient, const ProtocolMessage& caller_msg) {
     recipient.counterpart_pke_pk = caller_rua.rtu.pke_pk;
     recipient.counterpart_dr_pk = caller_rua.rtu.dr_pk;
     
+    // Populate remote party visible info (caller's verified identity)
+    recipient.remote_party.phone = recipient.src;  // caller's phone number
+    recipient.remote_party.name = caller_rua.rtu.name;
+    recipient.remote_party.logo = caller_rua.rtu.logo;
+    recipient.remote_party.verified = true;
+    
     // Finalize reply (remove misc, add sigma)
     reply.sigma = sigma.to_bytes();
     reply.misc.clear();
@@ -372,6 +379,12 @@ void rua_finalize(CallState& caller, const ProtocolMessage& recipient_msg) {
     caller.counterpart_amf_pk = recipient_rua.rtu.amf_pk;
     caller.counterpart_pke_pk = recipient_rua.rtu.pke_pk;
     caller.counterpart_dr_pk = recipient_rua.rtu.dr_pk;
+    
+    // Populate remote party visible info (recipient's verified identity)
+    caller.remote_party.phone = caller.dst;  // recipient's phone number
+    caller.remote_party.name = recipient_rua.rtu.name;
+    caller.remote_party.logo = recipient_rua.rtu.logo;
+    caller.remote_party.verified = true;
     
     // Transition to RUA phase
     caller.transition_to_rua(caller.rua.topic);

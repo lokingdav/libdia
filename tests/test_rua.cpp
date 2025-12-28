@@ -74,6 +74,7 @@ TEST_CASE("create_rtu_from_config creates valid RTU", "[rua]") {
     REQUIRE(rtu.expiration == tc.config.en_expiration);
     REQUIRE(rtu.signature == tc.config.ra_signature);
     REQUIRE(rtu.name == tc.config.my_name);
+    REQUIRE(rtu.logo == tc.config.my_logo);
 }
 
 TEST_CASE("derive_rua_topic produces consistent output", "[rua]") {
@@ -231,4 +232,35 @@ TEST_CASE("RUA DR encryption works correctly", "[rua]") {
     Bytes decrypted = bob.dr_session->decrypt(ciphertext);
     
     REQUIRE(decrypted == plaintext);
+}
+
+TEST_CASE("RUA populates remote_party info after completion", "[rua]") {
+    auto session = setup_ake_session();
+    auto& alice = *session.alice;
+    auto& bob = *session.bob;
+    
+    // Before RUA, remote_party should not be verified
+    REQUIRE_FALSE(alice.remote_party.verified);
+    REQUIRE_FALSE(bob.remote_party.verified);
+    
+    // Complete RUA handshake
+    Bytes request_bytes = rua_request(alice);
+    ProtocolMessage request_msg = ProtocolMessage::deserialize(request_bytes);
+    
+    Bytes response_bytes = rua_response(bob, request_msg);
+    ProtocolMessage response_msg = ProtocolMessage::deserialize(response_bytes);
+    
+    rua_finalize(alice, response_msg);
+    
+    // Bob (recipient) should see Alice's info
+    REQUIRE(bob.remote_party.verified);
+    REQUIRE(bob.remote_party.phone == "+1234567890");
+    REQUIRE(bob.remote_party.name == "Alice");
+    REQUIRE_FALSE(bob.remote_party.logo.empty());
+    
+    // Alice (caller) should see Bob's info
+    REQUIRE(alice.remote_party.verified);
+    REQUIRE(alice.remote_party.phone == "+1987654321");
+    REQUIRE(alice.remote_party.name == "Bob");
+    REQUIRE_FALSE(alice.remote_party.logo.empty());
 }

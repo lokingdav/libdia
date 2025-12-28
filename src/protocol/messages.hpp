@@ -34,6 +34,7 @@ struct Rtu {
     Bytes       expiration;  // RTU expiration
     Bytes       signature;   // Enrollment signature from RA
     std::string name;        // Display name
+    std::string logo;        // Display logo (URL or base64 encoded)
     Bytes       pke_pk;      // PKE public key for encryption
     Bytes       dr_pk;       // Double Ratchet public key
 
