@@ -2,10 +2,12 @@
 #define DIA_PROTOCOL_CALLSTATE_HPP
 
 #include "messages.hpp"
+#include "../crypto/doubleratchet.hpp"
 
 #include <string>
 #include <mutex>
 #include <optional>
+#include <memory>
 
 namespace protocol {
 
@@ -107,6 +109,9 @@ public:
     AkeState    ake;
     RuaState    rua;
     ClientConfig config;
+    
+    // Double Ratchet session (initialized after AKE completes)
+    std::unique_ptr<doubleratchet::DrSession> dr_session;
 
 private:
     mutable std::mutex mu_;

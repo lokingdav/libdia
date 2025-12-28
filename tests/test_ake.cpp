@@ -1,0 +1,329 @@
+#include <catch2/catch_test_macros.hpp>
+#include "../src/protocol/ake.hpp"
+#include "../src/crypto/bbs.hpp"
+#include "../src/crypto/pke.hpp"
+#include "../src/crypto/doubleratchet.hpp"
+#include "../src/crypto/ecgroup.hpp"
+#include <sodium.h>
+#include <memory>
+
+using namespace protocol;
+
+// Helper to create a test ClientConfig with valid enrollment credentials
+static ClientConfig create_test_config(const std::string& phone, const std::string& name) {
+    ClientConfig config;
+    config.my_phone = phone;
+    config.my_name = name;
+    config.my_logo = "";
+    
+    // Generate enrollment credentials using BBS
+    bbs::Params params = bbs::Params::Default();
+    bbs::KeyPair ra_kp = bbs::keygen(params);  // Simulated RA keypair
+    
+    config.ra_public_key = ra_kp.pk.to_bytes();
+    
+    // Generate AMF keys
+    bbs::KeyPair amf_kp = bbs::keygen(params);
+    config.amf_private_key = amf_kp.sk.to_bytes();
+    config.amf_public_key = amf_kp.pk.to_bytes();
+    
+    // Generate PKE keys
+    pke::KeyPair pke_kp = pke::keygen();
+    config.pke_private_key = pke_kp.private_key;
+    config.pke_public_key = pke_kp.public_key;
+    
+    // Generate DR keys
+    doubleratchet::DrKeyPair dr_kp = doubleratchet::keygen();
+    config.dr_private_key = dr_kp.private_key;
+    config.dr_public_key = dr_kp.public_key;
+    
+    // Generate expiration (simulate as timestamp bytes)
+    config.en_expiration = Bytes(8, 0xFF);  // Far future
+    
+    // Create message1: hash of (amf_pk, pke_pk, dr_pk, expiration, telephone_number)
+    Bytes tn_bytes(phone.begin(), phone.end());
+    Bytes message1 = hash_all({
+        config.amf_public_key,
+        config.pke_public_key,
+        config.dr_public_key,
+        config.en_expiration,
+        tn_bytes
+    });
+    
+    // message2: name
+    Bytes message2(name.begin(), name.end());
+    
+    // Create messages as scalars
+    ecgroup::Scalar m1 = ecgroup::Scalar::hash_to_scalar(message1);
+    ecgroup::Scalar m2 = ecgroup::Scalar::hash_to_scalar(message2);
+    std::vector<ecgroup::Scalar> msgs = {m1, m2};
+    
+    // Sign with RA key
+    bbs::Signature sig = bbs::sign(params, ra_kp.sk, msgs);
+    config.ra_signature = sig.to_bytes();
+    
+    return config;
+}
+
+// Helper to create CallState for testing (returns unique_ptr to avoid move issues)
+static std::unique_ptr<CallState> create_test_call_state(const std::string& phone, bool is_caller) {
+    ClientConfig config = create_test_config(phone, "Test User " + phone);
+    
+    std::string other_phone = is_caller ? "+1987654321" : "+1234567890";
+    std::string src = is_caller ? phone : other_phone;
+    std::string dst = is_caller ? other_phone : phone;
+    
+    // Create CallState (outgoing = caller, incoming = recipient)
+    return std::make_unique<CallState>(config, is_caller ? dst : src, is_caller);
+}
+
+TEST_CASE("hash_all produces consistent output", "[ake]") {
+    ecgroup::init_pairing();
+    
+    Bytes a = {0x01, 0x02, 0x03};
+    Bytes b = {0x04, 0x05, 0x06};
+    
+    Bytes hash1 = hash_all({a, b});
+    Bytes hash2 = hash_all({a, b});
+    
+    REQUIRE(hash1.size() == 32);  // SHA-256
+    REQUIRE(hash1 == hash2);
+    
+    // Different input should produce different hash
+    Bytes hash3 = hash_all({b, a});
+    REQUIRE(hash1 != hash3);
+}
+
+TEST_CASE("concat_bytes works correctly", "[ake]") {
+    ecgroup::init_pairing();
+    
+    Bytes a = {0x01, 0x02};
+    Bytes b = {0x03, 0x04, 0x05};
+    
+    Bytes result = concat_bytes(a, b);
+    
+    REQUIRE(result.size() == 5);
+    REQUIRE(result == Bytes({0x01, 0x02, 0x03, 0x04, 0x05}));
+}
+
+TEST_CASE("init_ake initializes AKE state", "[ake]") {
+    ecgroup::init_pairing();
+    
+    auto caller_config = create_test_config("+1234567890", "Alice");
+    CallState caller(caller_config, "+1987654321", true);
+    
+    // Before init_ake, DH keys should be empty
+    REQUIRE(caller.ake.dh_pk.empty());
+    REQUIRE(caller.ake.dh_sk.empty());
+    
+    init_ake(caller);
+    
+    // After init_ake, DH keys and topic should be set
+    REQUIRE(!caller.ake.dh_pk.empty());
+    REQUIRE(!caller.ake.dh_sk.empty());
+    REQUIRE(!caller.ake.topic.empty());
+}
+
+TEST_CASE("create_zk_proof and verify_zk_proof round trip", "[ake]") {
+    ecgroup::init_pairing();
+    
+    // Create a config with valid enrollment credentials
+    auto config = create_test_config("+1234567890", "Alice");
+    
+    // Create call state as caller
+    CallState prover(config, "+1987654321", true);
+    init_ake(prover);
+    
+    // Create a challenge
+    Bytes challenge = hash_all({prover.ake.topic});
+    
+    // Create proof
+    Bytes proof = create_zk_proof(prover, challenge);
+    REQUIRE(!proof.empty());
+    
+    // Create an AkeMessage containing the proof and public keys
+    AkeMessage ake_msg;
+    ake_msg.amf_pk = prover.config.amf_public_key;
+    ake_msg.pke_pk = prover.config.pke_public_key;
+    ake_msg.dr_pk = prover.config.dr_public_key;
+    ake_msg.expiration = prover.config.en_expiration;
+    ake_msg.proof = proof;
+    
+    // Verify the proof using the same challenge and the prover's phone number
+    bool valid = verify_zk_proof(ake_msg, prover.src, challenge, prover.config.ra_public_key);
+    REQUIRE(valid);
+}
+
+TEST_CASE("ake_request creates valid request message", "[ake]") {
+    ecgroup::init_pairing();
+    
+    auto caller_config = create_test_config("+1234567890", "Alice");
+    CallState caller(caller_config, "+1987654321", true);
+    
+    init_ake(caller);
+    
+    Bytes msg_bytes = ake_request(caller);
+    
+    // Should produce a non-empty message
+    REQUIRE(!msg_bytes.empty());
+    
+    // Should be deserializable as ProtocolMessage
+    ProtocolMessage msg = ProtocolMessage::deserialize(msg_bytes);
+    REQUIRE(msg.is_ake_request());
+    REQUIRE(!msg.sender_id.empty());
+    
+    // Payload should be deserializable as AkeMessage (unencrypted)
+    AkeMessage ake_msg = decode_ake_payload(msg, {}, {});
+    REQUIRE(!ake_msg.amf_pk.empty());
+    REQUIRE(!ake_msg.pke_pk.empty());
+    REQUIRE(!ake_msg.dr_pk.empty());
+    REQUIRE(!ake_msg.proof.empty());
+    // DH public key is NOT included in AkeRequest
+    REQUIRE(ake_msg.dh_pk.empty());
+}
+
+TEST_CASE("ake_request without init throws", "[ake]") {
+    ecgroup::init_pairing();
+    
+    auto caller_config = create_test_config("+1234567890", "Alice");
+    CallState caller(caller_config, "+1987654321", true);
+    
+    // Don't call init_ake
+    REQUIRE_THROWS_AS(ake_request(caller), AkeError);
+}
+
+TEST_CASE("Complete AKE flow", "[ake]") {
+    ecgroup::init_pairing();
+    
+    // Both parties have the same RA public key (shared trust anchor)
+    bbs::Params params = bbs::Params::Default();
+    bbs::KeyPair ra_kp = bbs::keygen(params);
+    
+    // Create caller (Alice) config - generates its own keys
+    auto alice_config = create_test_config("+1234567890", "Alice");
+    // Override with shared RA public key (but keep alice's RA signature which was signed with the local RA key)
+    // We need to re-sign with the shared RA key
+    alice_config.ra_public_key = ra_kp.pk.to_bytes();
+    
+    // Re-sign with shared RA key - using Alice's phone number
+    Bytes alice_tn(alice_config.my_phone.begin(), alice_config.my_phone.end());
+    Bytes alice_m1 = hash_all({
+        alice_config.amf_public_key,
+        alice_config.pke_public_key,
+        alice_config.dr_public_key,
+        alice_config.en_expiration,
+        alice_tn
+    });
+    Bytes alice_m2(alice_config.my_name.begin(), alice_config.my_name.end());
+    std::vector<ecgroup::Scalar> alice_msgs = {
+        ecgroup::Scalar::hash_to_scalar(alice_m1),
+        ecgroup::Scalar::hash_to_scalar(alice_m2)
+    };
+    alice_config.ra_signature = bbs::sign(params, ra_kp.sk, alice_msgs).to_bytes();
+    
+    // Create recipient (Bob) config
+    auto bob_config = create_test_config("+1987654321", "Bob");
+    bob_config.ra_public_key = ra_kp.pk.to_bytes();
+    
+    // Re-sign with shared RA key - using Bob's phone number
+    Bytes bob_tn(bob_config.my_phone.begin(), bob_config.my_phone.end());
+    Bytes bob_m1 = hash_all({
+        bob_config.amf_public_key,
+        bob_config.pke_public_key,
+        bob_config.dr_public_key,
+        bob_config.en_expiration,
+        bob_tn
+    });
+    Bytes bob_m2(bob_config.my_name.begin(), bob_config.my_name.end());
+    std::vector<ecgroup::Scalar> bob_msgs = {
+        ecgroup::Scalar::hash_to_scalar(bob_m1),
+        ecgroup::Scalar::hash_to_scalar(bob_m2)
+    };
+    bob_config.ra_signature = bbs::sign(params, ra_kp.sk, bob_msgs).to_bytes();
+    
+    // Create CallStates
+    // Alice is caller, calling Bob
+    CallState alice(alice_config, "+1987654321", true);
+    alice.src = "+1234567890";
+    alice.dst = "+1987654321";
+    alice.ts = get_normalized_ts();
+    
+    // Bob is recipient
+    CallState bob(bob_config, "+1234567890", false);
+    bob.src = "+1234567890";  // src is caller's number
+    bob.dst = "+1987654321";  // dst is recipient's number
+    bob.ts = alice.ts;  // Same timestamp
+    
+    // Initialize AKE for both parties
+    init_ake(alice);
+    init_ake(bob);
+    
+    // Step 1: Alice creates AkeRequest
+    Bytes request_bytes = ake_request(alice);
+    ProtocolMessage request_msg = ProtocolMessage::deserialize(request_bytes);
+    REQUIRE(request_msg.is_ake_request());
+    
+    // Step 2: Bob processes AkeRequest and creates AkeResponse
+    Bytes response_bytes = ake_response(bob, request_msg);
+    ProtocolMessage response_msg = ProtocolMessage::deserialize(response_bytes);
+    REQUIRE(response_msg.is_ake_response());
+    
+    // Verify Bob stored Alice's info
+    REQUIRE(!bob.counterpart_amf_pk.empty());
+    REQUIRE(!bob.counterpart_pke_pk.empty());
+    REQUIRE(!bob.counterpart_dr_pk.empty());
+    
+    // Step 3: Alice processes AkeResponse and creates AkeComplete
+    Bytes complete_bytes = ake_complete(alice, response_msg);
+    ProtocolMessage complete_msg = ProtocolMessage::deserialize(complete_bytes);
+    REQUIRE(complete_msg.is_ake_complete());
+    
+    // Verify Alice has shared key and DR session
+    REQUIRE(!alice.shared_key.empty());
+    REQUIRE(alice.dr_session != nullptr);
+    REQUIRE(!alice.counterpart_amf_pk.empty());
+    
+    // Step 4: Bob processes AkeComplete (finalize)
+    REQUIRE_NOTHROW(ake_finalize(bob, complete_msg));
+    
+    // Verify Bob has shared key and DR session
+    REQUIRE(!bob.shared_key.empty());
+    REQUIRE(bob.dr_session != nullptr);
+    
+    // Both should have the same shared key
+    REQUIRE(alice.shared_key == bob.shared_key);
+    
+    // Test DR session works
+    std::string test_msg = "Hello, Bob!";
+    Bytes plaintext(test_msg.begin(), test_msg.end());
+    
+    Bytes ciphertext = alice.dr_session->encrypt(plaintext);
+    Bytes decrypted = bob.dr_session->decrypt(ciphertext);
+    
+    REQUIRE(decrypted == plaintext);
+    
+    // Test bidirectional
+    std::string reply = "Hello, Alice!";
+    Bytes reply_pt(reply.begin(), reply.end());
+    
+    Bytes reply_ct = bob.dr_session->encrypt(reply_pt);
+    Bytes reply_dec = alice.dr_session->decrypt(reply_ct);
+    
+    REQUIRE(reply_dec == reply_pt);
+}
+
+TEST_CASE("AKE fails with wrong message type", "[ake]") {
+    ecgroup::init_pairing();
+    
+    auto config = create_test_config("+1234567890", "Alice");
+    CallState state(config, "+1987654321", false);
+    init_ake(state);
+    
+    // Create a wrong message type
+    ProtocolMessage wrong_msg;
+    wrong_msg.type = MessageType::AkeComplete;  // Wrong type for ake_response
+    wrong_msg.sender_id = "test";
+    wrong_msg.topic = "test";
+    
+    REQUIRE_THROWS_AS(ake_response(state, wrong_msg), AkeError);
+}
