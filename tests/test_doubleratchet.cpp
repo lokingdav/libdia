@@ -1,15 +1,14 @@
 #include <catch2/catch_test_macros.hpp>
+#include "test_helpers.hpp"
 #include "../src/crypto/doubleratchet.hpp"
-#include <sodium.h>
 #include <string>
 
 using namespace doubleratchet;
+using test_helpers::random_bytes;
 
-// Helper to generate a random 32-byte key
+// Convenience alias for 32-byte random key
 static Bytes random_key() {
-    Bytes key(32);
-    randombytes_buf(key.data(), key.size());
-    return key;
+    return random_bytes(32);
 }
 
 TEST_CASE("keygen generates valid key pair", "[doubleratchet]") {

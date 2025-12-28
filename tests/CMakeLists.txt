@@ -27,7 +27,10 @@ set(TEST_SRC_FILES
     test_enrollment.cpp
 )
 add_executable(run_dia_tests ${TEST_SRC_FILES})
-target_include_directories(run_dia_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_include_directories(run_dia_tests PRIVATE 
+    "${PROJECT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}"  # For test_helpers.hpp
+)
 
 # -----------------------------------------------------------------------------
 # Link Libraries

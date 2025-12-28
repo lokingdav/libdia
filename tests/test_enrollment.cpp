@@ -1,36 +1,22 @@
 #include <catch2/catch_test_macros.hpp>
+#include "test_helpers.hpp"
 #include "../src/protocol/enrollment.hpp"
-#include "../src/crypto/ecgroup.hpp"
-#include "../src/crypto/bbs.hpp"
-#include "../src/crypto/voprf.hpp"
-#include "../src/helpers.hpp"
-#include <sodium.h>
 
 using namespace protocol;
+using namespace test_helpers;
 using ecgroup::Bytes;
 using dia::utils::hash_all;
 
 // Helper to create a valid server config for testing
 static ServerConfig create_test_server_config() {
-    ecgroup::init_pairing();
+    auto ts = create_server_config();
     
     ServerConfig config;
-    
-    // Generate Credential Issuance keypair (BBS)
-    bbs::Params params = bbs::Params::Default();
-    bbs::KeyPair ci_kp = bbs::keygen(params);
-    config.ci_private_key = ci_kp.sk.to_bytes();
-    config.ci_public_key = ci_kp.pk.to_bytes();
-    
-    // Generate Access Throttling keypair (VOPRF)
-    voprf::KeyPair at_kp = voprf::keygen();
-    config.at_private_key = at_kp.sk.to_bytes();
-    config.at_public_key = at_kp.pk.to_bytes();
-    
-    // Generate Moderator AMF keypair
-    bbs::KeyPair amf_kp = bbs::keygen(params);
-    config.amf_public_key = amf_kp.pk.to_bytes();
-    
+    config.ci_private_key = ts.ci_private_key;
+    config.ci_public_key = ts.ci_public_key;
+    config.at_private_key = ts.at_private_key;
+    config.at_public_key = ts.at_public_key;
+    config.amf_public_key = ts.mod_public_key;  // Using AMF keygen!
     config.enrollment_duration_days = 30;
     
     return config;
@@ -51,7 +37,7 @@ TEST_CASE("check_expiry returns false for expired timestamp", "[enrollment]") {
 }
 
 TEST_CASE("generate_blinded_tickets creates valid tickets", "[enrollment]") {
-    ecgroup::init_pairing();
+    init_crypto();
     
     auto tickets = generate_blinded_tickets(3);
     
@@ -129,7 +115,7 @@ TEST_CASE("EnrollmentResponse serialization round trip", "[enrollment]") {
 }
 
 TEST_CASE("create_enrollment_request generates all keys", "[enrollment]") {
-    ecgroup::init_pairing();
+    init_crypto();
     
     auto [keys, request] = create_enrollment_request(
         "+1234567890",
@@ -171,7 +157,7 @@ TEST_CASE("create_enrollment_request generates all keys", "[enrollment]") {
 }
 
 TEST_CASE("process_enrollment validates signature", "[enrollment]") {
-    ecgroup::init_pairing();
+    init_crypto();
     
     ServerConfig server_config = create_test_server_config();
     
@@ -194,7 +180,7 @@ TEST_CASE("process_enrollment validates signature", "[enrollment]") {
 }
 
 TEST_CASE("Complete enrollment flow", "[enrollment]") {
-    ecgroup::init_pairing();
+    init_crypto();
     
     // Setup server
     ServerConfig server_config = create_test_server_config();
@@ -248,7 +234,7 @@ TEST_CASE("Complete enrollment flow", "[enrollment]") {
 }
 
 TEST_CASE("Enrolled credential can be used for ZK proof", "[enrollment]") {
-    ecgroup::init_pairing();
+    init_crypto();
     
     // Setup server
     ServerConfig server_config = create_test_server_config();
@@ -306,7 +292,7 @@ TEST_CASE("Enrolled credential can be used for ZK proof", "[enrollment]") {
 }
 
 TEST_CASE("Finalized ticket can be verified", "[enrollment]") {
-    ecgroup::init_pairing();
+    init_crypto();
     
     // Setup server
     ServerConfig server_config = create_test_server_config();
