@@ -208,4 +208,113 @@ TEST_CASE("Protocol CallState", "[protocol][callstate]") {
         // If we get here without crashing, thread safety is working
         REQUIRE(true);
     }
+
+    SECTION("ClientConfig to_env_string serialization") {
+        protocol::ClientConfig config;
+        config.my_phone = "+1234567890";
+        config.my_name = "Test User";
+        config.my_logo = "https://example.com/logo.png";
+        config.en_expiration = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
+        config.ra_public_key = {0xAA, 0xBB, 0xCC};
+        config.ra_signature = {0xDD, 0xEE, 0xFF};
+        config.amf_private_key = {0x11, 0x22};
+        config.amf_public_key = {0x33, 0x44};
+        config.pke_private_key = {0x55, 0x66};
+        config.pke_public_key = {0x77, 0x88};
+        config.dr_private_key = {0x99, 0xAA};
+        config.dr_public_key = {0xBB, 0xCC};
+        config.access_ticket_vk = {0xDD};
+        config.sample_ticket = {0xEE, 0xFF};
+        config.moderator_public_key = {0x12, 0x34, 0x56};
+        
+        std::string env_str = config.to_env_string();
+        
+        // Check that key fields are present
+        REQUIRE(env_str.find("MY_PHONE=+1234567890") != std::string::npos);
+        REQUIRE(env_str.find("MY_NAME=Test User") != std::string::npos);
+        REQUIRE(env_str.find("MY_LOGO=https://example.com/logo.png") != std::string::npos);
+        REQUIRE(env_str.find("ENROLLMENT_EXPIRATION=0102030405060708") != std::string::npos);
+        REQUIRE(env_str.find("RA_PUBLIC_KEY=aabbcc") != std::string::npos);
+        REQUIRE(env_str.find("AMF_PRIVATE_KEY=1122") != std::string::npos);
+        REQUIRE(env_str.find("MODERATOR_PUBLIC_KEY=123456") != std::string::npos);
+    }
+
+    SECTION("ClientConfig from_env_string parsing") {
+        std::string env_content = R"(MY_PHONE=+1234567890
+MY_NAME=Test User
+MY_LOGO=https://example.com/logo.png
+ENROLLMENT_EXPIRATION=0102030405060708
+RA_PUBLIC_KEY=aabbcc
+RA_SIGNATURE=ddeeff
+AMF_PRIVATE_KEY=1122
+AMF_PUBLIC_KEY=3344
+PKE_PRIVATE_KEY=5566
+PKE_PUBLIC_KEY=7788
+DR_PRIVATE_KEY=99aa
+DR_PUBLIC_KEY=bbcc
+ACCESS_TICKET_VK=dd
+SAMPLE_TICKET=eeff
+MODERATOR_PUBLIC_KEY=123456
+)";
+        
+        protocol::ClientConfig config = protocol::ClientConfig::from_env_string(env_content);
+        
+        REQUIRE(config.my_phone == "+1234567890");
+        REQUIRE(config.my_name == "Test User");
+        REQUIRE(config.my_logo == "https://example.com/logo.png");
+        REQUIRE(config.en_expiration == protocol::Bytes({0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}));
+        REQUIRE(config.ra_public_key == protocol::Bytes({0xAA, 0xBB, 0xCC}));
+        REQUIRE(config.ra_signature == protocol::Bytes({0xDD, 0xEE, 0xFF}));
+        REQUIRE(config.amf_private_key == protocol::Bytes({0x11, 0x22}));
+        REQUIRE(config.amf_public_key == protocol::Bytes({0x33, 0x44}));
+        REQUIRE(config.pke_private_key == protocol::Bytes({0x55, 0x66}));
+        REQUIRE(config.pke_public_key == protocol::Bytes({0x77, 0x88}));
+        REQUIRE(config.dr_private_key == protocol::Bytes({0x99, 0xAA}));
+        REQUIRE(config.dr_public_key == protocol::Bytes({0xBB, 0xCC}));
+        REQUIRE(config.access_ticket_vk == protocol::Bytes({0xDD}));
+        REQUIRE(config.sample_ticket == protocol::Bytes({0xEE, 0xFF}));
+        REQUIRE(config.moderator_public_key == protocol::Bytes({0x12, 0x34, 0x56}));
+    }
+
+    SECTION("ClientConfig env string round trip") {
+        protocol::ClientConfig original;
+        original.my_phone = "+1987654321";
+        original.my_name = "Alice";
+        original.my_logo = "";
+        original.en_expiration = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88};
+        original.ra_public_key = protocol::Bytes(96, 0xAB);
+        original.ra_signature = protocol::Bytes(128, 0xCD);
+        original.amf_private_key = protocol::Bytes(32, 0x11);
+        original.amf_public_key = protocol::Bytes(48, 0x22);
+        original.pke_private_key = protocol::Bytes(32, 0x33);
+        original.pke_public_key = protocol::Bytes(32, 0x44);
+        original.dr_private_key = protocol::Bytes(32, 0x55);
+        original.dr_public_key = protocol::Bytes(32, 0x66);
+        original.access_ticket_vk = protocol::Bytes(96, 0x77);
+        original.sample_ticket = protocol::Bytes(80, 0x88);
+        original.moderator_public_key = protocol::Bytes(48, 0x99);
+        
+        // Serialize
+        std::string env_str = original.to_env_string();
+        
+        // Parse back
+        protocol::ClientConfig restored = protocol::ClientConfig::from_env_string(env_str);
+        
+        // Verify all fields match
+        REQUIRE(restored.my_phone == original.my_phone);
+        REQUIRE(restored.my_name == original.my_name);
+        REQUIRE(restored.my_logo == original.my_logo);
+        REQUIRE(restored.en_expiration == original.en_expiration);
+        REQUIRE(restored.ra_public_key == original.ra_public_key);
+        REQUIRE(restored.ra_signature == original.ra_signature);
+        REQUIRE(restored.amf_private_key == original.amf_private_key);
+        REQUIRE(restored.amf_public_key == original.amf_public_key);
+        REQUIRE(restored.pke_private_key == original.pke_private_key);
+        REQUIRE(restored.pke_public_key == original.pke_public_key);
+        REQUIRE(restored.dr_private_key == original.dr_private_key);
+        REQUIRE(restored.dr_public_key == original.dr_public_key);
+        REQUIRE(restored.access_ticket_vk == original.access_ticket_vk);
+        REQUIRE(restored.sample_ticket == original.sample_ticket);
+        REQUIRE(restored.moderator_public_key == original.moderator_public_key);
+    }
 }

@@ -123,4 +123,110 @@ void CallState::update_caller(const Bytes& chal, const Bytes& proof) {
     ake.caller_proof = proof;
 }
 
+// -----------------------------------------------------------------------------
+// ClientConfig environment string serialization
+// -----------------------------------------------------------------------------
+
+std::string ClientConfig::to_env_string() const {
+    using dia::utils::bytes_to_hex;
+    
+    std::ostringstream oss;
+    
+    // Personal details
+    oss << "MY_PHONE=" << my_phone << "\n";
+    oss << "MY_NAME=" << my_name << "\n";
+    oss << "MY_LOGO=" << my_logo << "\n";
+    
+    // Credential verification
+    oss << "ENROLLMENT_EXPIRATION=" << bytes_to_hex(en_expiration) << "\n";
+    oss << "RA_PUBLIC_KEY=" << bytes_to_hex(ra_public_key) << "\n";
+    oss << "RA_SIGNATURE=" << bytes_to_hex(ra_signature) << "\n";
+    
+    // AMF keys
+    oss << "AMF_PRIVATE_KEY=" << bytes_to_hex(amf_private_key) << "\n";
+    oss << "AMF_PUBLIC_KEY=" << bytes_to_hex(amf_public_key) << "\n";
+    
+    // PKE keys
+    oss << "PKE_PRIVATE_KEY=" << bytes_to_hex(pke_private_key) << "\n";
+    oss << "PKE_PUBLIC_KEY=" << bytes_to_hex(pke_public_key) << "\n";
+    
+    // DR keys
+    oss << "DR_PRIVATE_KEY=" << bytes_to_hex(dr_private_key) << "\n";
+    oss << "DR_PUBLIC_KEY=" << bytes_to_hex(dr_public_key) << "\n";
+    
+    // Access ticket
+    oss << "ACCESS_TICKET_VK=" << bytes_to_hex(access_ticket_vk) << "\n";
+    oss << "SAMPLE_TICKET=" << bytes_to_hex(sample_ticket) << "\n";
+    
+    // Moderator
+    oss << "MODERATOR_PUBLIC_KEY=" << bytes_to_hex(moderator_public_key) << "\n";
+    
+    return oss.str();
+}
+
+ClientConfig ClientConfig::from_env_string(const std::string& env_content) {
+    using dia::utils::hex_to_bytes;
+    
+    ClientConfig config;
+    std::istringstream iss(env_content);
+    std::string line;
+    
+    while (std::getline(iss, line)) {
+        // Skip empty lines and comments
+        if (line.empty() || line[0] == '#') {
+            continue;
+        }
+        
+        // Find the '=' separator
+        auto eq_pos = line.find('=');
+        if (eq_pos == std::string::npos) {
+            continue;
+        }
+        
+        std::string key = line.substr(0, eq_pos);
+        std::string value = line.substr(eq_pos + 1);
+        
+        // Remove trailing whitespace/newline
+        while (!value.empty() && (value.back() == '\r' || value.back() == '\n' || value.back() == ' ')) {
+            value.pop_back();
+        }
+        
+        // Parse based on key
+        if (key == "MY_PHONE") {
+            config.my_phone = value;
+        } else if (key == "MY_NAME") {
+            config.my_name = value;
+        } else if (key == "MY_LOGO") {
+            config.my_logo = value;
+        } else if (key == "ENROLLMENT_EXPIRATION") {
+            config.en_expiration = hex_to_bytes(value);
+        } else if (key == "RA_PUBLIC_KEY") {
+            config.ra_public_key = hex_to_bytes(value);
+        } else if (key == "RA_SIGNATURE") {
+            config.ra_signature = hex_to_bytes(value);
+        } else if (key == "AMF_PRIVATE_KEY") {
+            config.amf_private_key = hex_to_bytes(value);
+        } else if (key == "AMF_PUBLIC_KEY") {
+            config.amf_public_key = hex_to_bytes(value);
+        } else if (key == "PKE_PRIVATE_KEY") {
+            config.pke_private_key = hex_to_bytes(value);
+        } else if (key == "PKE_PUBLIC_KEY") {
+            config.pke_public_key = hex_to_bytes(value);
+        } else if (key == "DR_PRIVATE_KEY") {
+            config.dr_private_key = hex_to_bytes(value);
+        } else if (key == "DR_PUBLIC_KEY") {
+            config.dr_public_key = hex_to_bytes(value);
+        } else if (key == "ACCESS_TICKET_VK") {
+            config.access_ticket_vk = hex_to_bytes(value);
+        } else if (key == "SAMPLE_TICKET") {
+            config.sample_ticket = hex_to_bytes(value);
+        } else if (key == "MODERATOR_PUBLIC_KEY") {
+            config.moderator_public_key = hex_to_bytes(value);
+        }
+        // Unknown keys are silently ignored
+    }
+    
+    return config;
+}
+
 } // namespace protocol

@@ -43,6 +43,13 @@ struct ClientConfig {
 
     // Moderation public key
     Bytes moderator_public_key;
+    
+    // Serialize to environment variable format string
+    // Each field is on a separate line: KEY=value
+    std::string to_env_string() const;
+    
+    // Parse from environment variable format string
+    static ClientConfig from_env_string(const std::string& env_content);
 };
 
 // -----------------------------------------------------------------------------
