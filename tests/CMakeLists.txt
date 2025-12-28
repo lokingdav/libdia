@@ -24,6 +24,7 @@ set(TEST_SRC_FILES
     test_pke.cpp
     test_doubleratchet.cpp
     test_ake.cpp
+    test_enrollment.cpp
 )
 add_executable(run_dia_tests ${TEST_SRC_FILES})
 target_include_directories(run_dia_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
