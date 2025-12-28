@@ -1,17 +1,13 @@
 #ifndef DIA_PROTOCOL_CALLSTATE_HPP
 #define DIA_PROTOCOL_CALLSTATE_HPP
 
-#include "../crypto/ecgroup.hpp"
+#include "messages.hpp"
 
 #include <string>
 #include <mutex>
 #include <optional>
-#include <cstdint>
-#include <memory>
 
 namespace protocol {
-
-using Bytes = ecgroup::Bytes;
 
 // -----------------------------------------------------------------------------
 // ClientConfig - Configuration containing client keys and credentials
@@ -45,30 +41,6 @@ struct ClientConfig {
 
     // Moderation public key
     Bytes moderator_public_key;
-};
-
-// -----------------------------------------------------------------------------
-// Rtu - Right To Use credential (replaces protobuf Rtu message)
-// -----------------------------------------------------------------------------
-struct Rtu {
-    Bytes       amf_pk;      // AMF public key
-    Bytes       expiration;  // RTU expiration
-    Bytes       signature;   // Enrollment signature from RA
-    std::string name;        // Display name
-    Bytes       pke_pk;      // PKE public key for encryption
-    Bytes       dr_pk;       // Double Ratchet public key
-};
-
-// -----------------------------------------------------------------------------
-// RuaMessage - Rich User Authentication message (replaces protobuf RuaMessage)
-// -----------------------------------------------------------------------------
-struct RuaMessage {
-    Bytes       dh_pk;   // DH public key for RUA phase
-    std::string reason;  // Call reason
-    Rtu         rtu;     // RTU info
-    std::string tpc;     // Topic
-    Bytes       misc;    // Misc data
-    Bytes       sigma;   // Signature
 };
 
 // -----------------------------------------------------------------------------
