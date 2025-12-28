@@ -8,44 +8,6 @@ namespace protocol {
 using namespace dia::utils;
 
 // -----------------------------------------------------------------------------
-// Hash utilities
-// -----------------------------------------------------------------------------
-
-Bytes hash_all(std::initializer_list<Bytes> inputs) {
-    crypto_hash_sha256_state state;
-    crypto_hash_sha256_init(&state);
-    
-    for (const auto& input : inputs) {
-        crypto_hash_sha256_update(&state, input.data(), input.size());
-    }
-    
-    Bytes result(crypto_hash_sha256_BYTES);
-    crypto_hash_sha256_final(&state, result.data());
-    return result;
-}
-
-Bytes hash_all(const std::vector<Bytes>& inputs) {
-    crypto_hash_sha256_state state;
-    crypto_hash_sha256_init(&state);
-    
-    for (const auto& input : inputs) {
-        crypto_hash_sha256_update(&state, input.data(), input.size());
-    }
-    
-    Bytes result(crypto_hash_sha256_BYTES);
-    crypto_hash_sha256_final(&state, result.data());
-    return result;
-}
-
-Bytes concat_bytes(const Bytes& a, const Bytes& b) {
-    Bytes result;
-    result.reserve(a.size() + b.size());
-    result.insert(result.end(), a.begin(), a.end());
-    result.insert(result.end(), b.begin(), b.end());
-    return result;
-}
-
-// -----------------------------------------------------------------------------
 // ZK Proof functions
 // -----------------------------------------------------------------------------
 

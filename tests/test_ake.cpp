@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include "../src/protocol/ake.hpp"
+#include "../src/helpers.hpp"
 #include "../src/crypto/bbs.hpp"
 #include "../src/crypto/pke.hpp"
 #include "../src/crypto/doubleratchet.hpp"
@@ -8,6 +9,8 @@
 #include <memory>
 
 using namespace protocol;
+using dia::utils::hash_all;
+using dia::utils::concat_bytes;
 
 // Helper to create a test ClientConfig with valid enrollment credentials
 static ClientConfig create_test_config(const std::string& phone, const std::string& name) {

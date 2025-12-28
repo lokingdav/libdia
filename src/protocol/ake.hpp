@@ -80,13 +80,6 @@ void ake_finalize(CallState& recipient, const ProtocolMessage& caller_msg);
 // Helper functions
 // -----------------------------------------------------------------------------
 
-// Hash multiple byte vectors together (SHA-256)
-Bytes hash_all(std::initializer_list<Bytes> inputs);
-Bytes hash_all(const std::vector<Bytes>& inputs);
-
-// Concatenate bytes
-Bytes concat_bytes(const Bytes& a, const Bytes& b);
-
 // Compute shared key from AKE parameters
 Bytes compute_shared_key(
     const Bytes& topic,

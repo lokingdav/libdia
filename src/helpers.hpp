@@ -5,6 +5,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <initializer_list>
+#include <vector>
 
 namespace dia {
 namespace utils {
@@ -24,6 +26,13 @@ namespace utils {
 
     // Strings as LP
     std::string read_string(const ecgroup::Bytes& in, std::size_t& off);
+
+    // Hash utilities (SHA-256)
+    ecgroup::Bytes hash_all(std::initializer_list<ecgroup::Bytes> inputs);
+    ecgroup::Bytes hash_all(const std::vector<ecgroup::Bytes>& inputs);
+
+    // Concatenate bytes
+    ecgroup::Bytes concat_bytes(const ecgroup::Bytes& a, const ecgroup::Bytes& b);
 
 } // namespace utils
 } // namespace dia
