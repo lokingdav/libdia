@@ -8,6 +8,7 @@
 #include "../src/crypto/pke.hpp"
 #include "../src/crypto/doubleratchet.hpp"
 #include "../src/protocol/callstate.hpp"
+#include "../src/protocol/enrollment.hpp"
 #include "../src/helpers.hpp"
 #include <sodium.h>
 #include <string>
@@ -156,7 +157,7 @@ inline TestClientConfig create_client_config(
     tc.config.pke_public_key = tc.pke_keypair.public_key;
     tc.config.dr_private_key = tc.dr_keypair.private_key;
     tc.config.dr_public_key = tc.dr_keypair.public_key;
-    tc.config.en_expiration = Bytes(8, 0xFF);  // Far future
+    tc.config.en_expiration = protocol::make_expiration(30);  // 30 days from now
     
     // Create BBS credential: message1 = hash(amf_pk, pke_pk, dr_pk, expiration, phone)
     Bytes tn_bytes(phone.begin(), phone.end());
