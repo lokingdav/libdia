@@ -1,5 +1,5 @@
 #include "bbs.hpp"
-#include "helpers.hpp"
+#include "../helpers.hpp"
 
 #include <algorithm>
 #include <cstdint>

@@ -4,15 +4,14 @@
 file(GLOB_RECURSE DIA_ALL_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 
 # Exclude specific files that belong to separate targets
-list(FILTER DIA_ALL_SOURCES EXCLUDE REGEX ".*ecgroup\\.cpp$")
-list(FILTER DIA_ALL_SOURCES EXCLUDE REGEX ".*dia_c\\.cpp$")
-list(FILTER DIA_ALL_SOURCES EXCLUDE REGEX ".*dia_jni\\.cpp$")
+list(FILTER DIA_ALL_SOURCES EXCLUDE REGEX ".*/crypto/ecgroup\\.cpp$")
+list(FILTER DIA_ALL_SOURCES EXCLUDE REGEX ".*/bindings/.*\\.cpp$")
 
 # -----------------------------------------------------------------------------
 # Cryptographic Shim Library (ecgroup)
 # -----------------------------------------------------------------------------
 add_library(ecgroup
-  ecgroup.cpp
+  crypto/ecgroup.cpp
 )
 
 message(STATUS "MCL headers will be pulled from: ${mcl_SOURCE_DIR}/include")
@@ -21,6 +20,7 @@ message(STATUS "FetchContent binary dir is: ${CMAKE_BINARY_DIR}/_deps/mcl-src")
 target_include_directories(ecgroup
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/crypto>
     $<INSTALL_INTERFACE:include>
     $<BUILD_INTERFACE:${mcl_SOURCE_DIR}/include>
 )
@@ -38,6 +38,8 @@ add_library(dia
 target_include_directories(dia
   PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/crypto>
     $<INSTALL_INTERFACE:include>
 )
 
@@ -48,7 +50,7 @@ target_link_libraries(dia PUBLIC ecgroup)
 # C Wrapper Library for Bindings
 # -----------------------------------------------------------------------------
 add_library(dia_c_interface STATIC
-  dia_c.cpp
+  bindings/dia_c.cpp
 )
 
 target_include_directories(dia_c_interface
@@ -64,7 +66,7 @@ if (BUILD_DIA_JNI)
   # -----------------------------------------------------------------------------
   # This library should ONLY contain the JNI-specific implementation.
   add_library(dia_jni SHARED
-    dia_jni.cpp
+    bindings/dia_jni.cpp
   )
 
   target_include_directories(dia_jni

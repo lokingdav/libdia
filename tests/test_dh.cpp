@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
-#include "dh.hpp"
-#include "ecgroup.hpp"
+#include "crypto/dh.hpp"
+#include "crypto/ecgroup.hpp"
 #include <vector>
 #include <string>
 

@@ -1,7 +1,7 @@
 #ifndef DIA_HELPERS_HPP
 #define DIA_HELPERS_HPP
 
-#include "ecgroup.hpp"
+#include "crypto/ecgroup.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <string>

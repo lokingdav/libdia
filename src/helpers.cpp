@@ -1,4 +1,5 @@
 #include "helpers.hpp"
+#include "crypto/ecgroup.hpp"
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>

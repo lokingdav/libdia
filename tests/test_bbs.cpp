@@ -1,8 +1,8 @@
 // test_bbs.cpp
 #include <catch2/catch_test_macros.hpp>
 
-#include "ecgroup.hpp"
-#include "bbs.hpp"
+#include "crypto/ecgroup.hpp"
+#include "crypto/bbs.hpp"
 
 #include <vector>
 #include <string>

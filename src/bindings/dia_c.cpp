@@ -1,11 +1,11 @@
 #include "dia/dia_c.h"
 #include "dia/dia.hpp"   // umbrella (ecgroup.hpp, etc.)
-#include "helpers.hpp"
+#include "../helpers.hpp"
 
-#include "voprf.hpp"
-#include "bbs.hpp"
-#include "amf.hpp"
-#include "dh.hpp"
+#include "../crypto/voprf.hpp"
+#include "../crypto/bbs.hpp"
+#include "../crypto/amf.hpp"
+#include "../crypto/dh.hpp"
 
 #include <vector>
 #include <string>

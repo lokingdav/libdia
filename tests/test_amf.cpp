@@ -1,8 +1,8 @@
 // test_amf.cpp
 #include <catch2/catch_test_macros.hpp>
 
-#include "ecgroup.hpp"
-#include "amf.hpp"
+#include "crypto/ecgroup.hpp"
+#include "crypto/amf.hpp"
 
 #include <stdexcept> // for std::runtime_error
 

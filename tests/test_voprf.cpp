@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
-#include "voprf.hpp"
-#include "ecgroup.hpp"
+#include "crypto/voprf.hpp"
+#include "crypto/ecgroup.hpp"
 #include <vector>
 #include <string>
 

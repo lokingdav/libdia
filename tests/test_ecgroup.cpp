@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <iostream>
-#include "ecgroup.hpp"
+#include "crypto/ecgroup.hpp"
 
 // A single test case with sections for better organization.
 TEST_CASE("Elliptic Curve Group Operations", "[ecgroup]") {
