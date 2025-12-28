@@ -269,3 +269,90 @@ TEST_CASE("Remote party info", "[c_api]") {
     dia_callstate_destroy(state);
     dia_config_destroy(cfg);
 }
+
+TEST_CASE("Enrollment API full flow", "[c_api][enrollment]") {
+    dia_init();
+    
+    // Create server config using test helper keys
+    init_crypto();
+    auto server_keys = test_helpers::create_server_config();
+    
+    dia_server_config_t* server_cfg = nullptr;
+    int result = dia_server_config_create(
+        server_keys.ci_private_key.data(), server_keys.ci_private_key.size(),
+        server_keys.ci_public_key.data(), server_keys.ci_public_key.size(),
+        server_keys.at_private_key.data(), server_keys.at_private_key.size(),
+        server_keys.at_public_key.data(), server_keys.at_public_key.size(),
+        server_keys.mod_public_key.data(), server_keys.mod_public_key.size(),
+        30,  // enrollment_duration_days
+        &server_cfg
+    );
+    REQUIRE(result == DIA_OK);
+    REQUIRE(server_cfg != nullptr);
+    
+    // Client creates enrollment request
+    dia_enrollment_keys_t* client_keys = nullptr;
+    unsigned char* request_data = nullptr;
+    size_t request_len = 0;
+    
+    result = dia_enrollment_create_request(
+        "+1234567890",
+        "Test User",
+        "https://example.com/logo.png",
+        3,  // num_tickets
+        &client_keys,
+        &request_data,
+        &request_len
+    );
+    REQUIRE(result == DIA_OK);
+    REQUIRE(client_keys != nullptr);
+    REQUIRE(request_data != nullptr);
+    REQUIRE(request_len > 0);
+    
+    // Server processes enrollment request
+    unsigned char* response_data = nullptr;
+    size_t response_len = 0;
+    
+    result = dia_enrollment_process(
+        server_cfg,
+        request_data,
+        request_len,
+        &response_data,
+        &response_len
+    );
+    REQUIRE(result == DIA_OK);
+    REQUIRE(response_data != nullptr);
+    REQUIRE(response_len > 0);
+    
+    // Client finalizes enrollment
+    dia_config_t* client_cfg = nullptr;
+    result = dia_enrollment_finalize(
+        client_keys,
+        response_data,
+        response_len,
+        "+1234567890",
+        "Test User",
+        "https://example.com/logo.png",
+        &client_cfg
+    );
+    REQUIRE(result == DIA_OK);
+    REQUIRE(client_cfg != nullptr);
+    
+    // Verify we can use the resulting config
+    char* env_str = nullptr;
+    REQUIRE(dia_config_to_env_string(client_cfg, &env_str) == DIA_OK);
+    REQUIRE(env_str != nullptr);
+    
+    // Config should have proper fields
+    std::string env(env_str);
+    REQUIRE(env.find("+1234567890") != std::string::npos);
+    REQUIRE(env.find("Test User") != std::string::npos);
+    
+    // Clean up
+    dia_free_string(env_str);
+    dia_free_bytes(request_data);
+    dia_free_bytes(response_data);
+    dia_enrollment_keys_destroy(client_keys);
+    dia_config_destroy(client_cfg);
+    dia_server_config_destroy(server_cfg);
+}

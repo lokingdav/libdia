@@ -37,6 +37,10 @@ extern "C" {
 typedef struct dia_config_t dia_config_t;
 typedef struct dia_callstate_t dia_callstate_t;
 typedef struct dia_message_t dia_message_t;
+typedef struct dia_enrollment_keys_t dia_enrollment_keys_t;
+typedef struct dia_enrollment_request_t dia_enrollment_request_t;
+typedef struct dia_enrollment_response_t dia_enrollment_response_t;
+typedef struct dia_server_config_t dia_server_config_t;
 
 /*==============================================================================
  * Remote party info (returned by dia_callstate_get_remote_party)
@@ -290,6 +294,100 @@ int dia_dr_decrypt(dia_callstate_t* state,
                    size_t ciphertext_len,
                    unsigned char** out,
                    size_t* out_len);
+
+/*==============================================================================
+ * Enrollment API (Client-side)
+ *============================================================================*/
+
+/**
+ * Create an enrollment request.
+ * Generates all necessary keys and creates a signed enrollment request.
+ * @param phone       Telephone number to enroll
+ * @param name        Display name
+ * @param logo_url    Logo URL (can be empty string)
+ * @param num_tickets Number of tickets to request (typically 1)
+ * @param keys_out    Output: enrollment keys (keep for finalization)
+ * @param request_out Output: serialized enrollment request to send to server
+ * @param request_len Output: length of request
+ */
+int dia_enrollment_create_request(const char* phone,
+                                  const char* name,
+                                  const char* logo_url,
+                                  size_t num_tickets,
+                                  dia_enrollment_keys_t** keys_out,
+                                  unsigned char** request_out,
+                                  size_t* request_len);
+
+/** Free enrollment keys handle. */
+void dia_enrollment_keys_destroy(dia_enrollment_keys_t* keys);
+
+/**
+ * Finalize enrollment after receiving server response.
+ * Returns a ClientConfig ready for use.
+ * @param keys         Enrollment keys from create_request
+ * @param response     Serialized server response
+ * @param response_len Length of response
+ * @param phone        Telephone number (same as in request)
+ * @param name         Display name (same as in request)
+ * @param logo_url     Logo URL (same as in request)
+ * @param config_out   Output: finalized ClientConfig
+ */
+int dia_enrollment_finalize(const dia_enrollment_keys_t* keys,
+                            const unsigned char* response,
+                            size_t response_len,
+                            const char* phone,
+                            const char* name,
+                            const char* logo_url,
+                            dia_config_t** config_out);
+
+/*==============================================================================
+ * Enrollment API (Server-side)
+ *============================================================================*/
+
+/**
+ * Create a server configuration for enrollment processing.
+ * @param ci_private_key     Credential issuance private key (BBS)
+ * @param ci_private_key_len Length of CI private key
+ * @param ci_public_key      Credential issuance public key (BBS)
+ * @param ci_public_key_len  Length of CI public key
+ * @param at_private_key     Access throttling private key (VOPRF)
+ * @param at_private_key_len Length of AT private key
+ * @param at_public_key      Access throttling public key (VOPRF)
+ * @param at_public_key_len  Length of AT public key
+ * @param amf_public_key     Moderator AMF public key
+ * @param amf_public_key_len Length of AMF public key
+ * @param duration_days      Enrollment duration in days
+ * @param config_out         Output: server config handle
+ */
+int dia_server_config_create(const unsigned char* ci_private_key,
+                             size_t ci_private_key_len,
+                             const unsigned char* ci_public_key,
+                             size_t ci_public_key_len,
+                             const unsigned char* at_private_key,
+                             size_t at_private_key_len,
+                             const unsigned char* at_public_key,
+                             size_t at_public_key_len,
+                             const unsigned char* amf_public_key,
+                             size_t amf_public_key_len,
+                             int duration_days,
+                             dia_server_config_t** config_out);
+
+/** Free server config handle. */
+void dia_server_config_destroy(dia_server_config_t* config);
+
+/**
+ * Process an enrollment request (server-side).
+ * @param config       Server configuration
+ * @param request      Serialized enrollment request from client
+ * @param request_len  Length of request
+ * @param response_out Output: serialized enrollment response
+ * @param response_len Output: length of response
+ */
+int dia_enrollment_process(const dia_server_config_t* config,
+                           const unsigned char* request,
+                           size_t request_len,
+                           unsigned char** response_out,
+                           size_t* response_len);
 
 #ifdef __cplusplus
 }

@@ -3,6 +3,7 @@
 #include "../protocol/messages.hpp"
 #include "../protocol/ake.hpp"
 #include "../protocol/rua.hpp"
+#include "../protocol/enrollment.hpp"
 #include "../crypto/ecgroup.hpp"
 #include "../helpers.hpp"
 
@@ -27,6 +28,14 @@ struct dia_callstate_t {
 
 struct dia_message_t {
     ProtocolMessage msg;
+};
+
+struct dia_enrollment_keys_t {
+    EnrollmentKeys keys;
+};
+
+struct dia_server_config_t {
+    ServerConfig config;
 };
 
 /*==============================================================================
@@ -512,6 +521,133 @@ int dia_dr_decrypt(dia_callstate_t* state,
         Bytes ct(ciphertext, ciphertext + ciphertext_len);
         Bytes pt = state->state->dr_session->decrypt(ct);
         copy_to_c_bytes(pt, out, out_len);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR;
+    }
+}
+
+/*==============================================================================
+ * Enrollment API (Client-side)
+ *============================================================================*/
+
+int dia_enrollment_create_request(const char* telephone_number,
+                                   const char* name,
+                                   const char* logo_url,
+                                   size_t num_tickets,
+                                   dia_enrollment_keys_t** out_keys,
+                                   unsigned char** out_request,
+                                   size_t* out_request_len) {
+    if (!telephone_number || !name || !logo_url || !out_keys || !out_request || !out_request_len)
+        return DIA_ERR_INVALID_ARG;
+    
+    try {
+        auto [keys, request] = create_enrollment_request(
+            telephone_number, name, logo_url, num_tickets > 0 ? num_tickets : 1);
+        
+        // Return keys as opaque handle
+        auto* k = new dia_enrollment_keys_t{std::move(keys)};
+        *out_keys = k;
+        
+        // Serialize request
+        Bytes req_bytes = request.serialize();
+        copy_to_c_bytes(req_bytes, out_request, out_request_len);
+        
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR;
+    }
+}
+
+void dia_enrollment_keys_destroy(dia_enrollment_keys_t* keys) {
+    delete keys;
+}
+
+int dia_enrollment_finalize(const dia_enrollment_keys_t* keys,
+                             const unsigned char* response_data,
+                             size_t response_len,
+                             const char* telephone_number,
+                             const char* name,
+                             const char* logo_url,
+                             dia_config_t** out_config) {
+    if (!keys || !response_data || !telephone_number || !name || !logo_url || !out_config)
+        return DIA_ERR_INVALID_ARG;
+    
+    try {
+        Bytes resp_bytes(response_data, response_data + response_len);
+        EnrollmentResponse response = EnrollmentResponse::deserialize(resp_bytes);
+        
+        ClientConfig config = finalize_enrollment(
+            keys->keys, response, telephone_number, name, logo_url);
+        
+        auto* cfg = new dia_config_t{std::move(config)};
+        *out_config = cfg;
+        
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR;
+    }
+}
+
+/*==============================================================================
+ * Enrollment API (Server-side)
+ *============================================================================*/
+
+int dia_server_config_create(const unsigned char* ci_private_key,
+                              size_t ci_private_key_len,
+                              const unsigned char* ci_public_key,
+                              size_t ci_public_key_len,
+                              const unsigned char* at_private_key,
+                              size_t at_private_key_len,
+                              const unsigned char* at_public_key,
+                              size_t at_public_key_len,
+                              const unsigned char* amf_public_key,
+                              size_t amf_public_key_len,
+                              int enrollment_duration_days,
+                              dia_server_config_t** out_config) {
+    if (!ci_private_key || !ci_public_key || !at_private_key || 
+        !at_public_key || !amf_public_key || !out_config)
+        return DIA_ERR_INVALID_ARG;
+    
+    try {
+        ServerConfig config;
+        config.ci_private_key = Bytes(ci_private_key, ci_private_key + ci_private_key_len);
+        config.ci_public_key = Bytes(ci_public_key, ci_public_key + ci_public_key_len);
+        config.at_private_key = Bytes(at_private_key, at_private_key + at_private_key_len);
+        config.at_public_key = Bytes(at_public_key, at_public_key + at_public_key_len);
+        config.amf_public_key = Bytes(amf_public_key, amf_public_key + amf_public_key_len);
+        config.enrollment_duration_days = enrollment_duration_days > 0 ? enrollment_duration_days : 30;
+        
+        auto* cfg = new dia_server_config_t{std::move(config)};
+        *out_config = cfg;
+        
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR;
+    }
+}
+
+void dia_server_config_destroy(dia_server_config_t* config) {
+    delete config;
+}
+
+int dia_enrollment_process(const dia_server_config_t* server_config,
+                            const unsigned char* request_data,
+                            size_t request_len,
+                            unsigned char** out_response,
+                            size_t* out_response_len) {
+    if (!server_config || !request_data || !out_response || !out_response_len)
+        return DIA_ERR_INVALID_ARG;
+    
+    try {
+        Bytes req_bytes(request_data, request_data + request_len);
+        EnrollmentRequest request = EnrollmentRequest::deserialize(req_bytes);
+        
+        EnrollmentResponse response = process_enrollment(server_config->config, request);
+        
+        Bytes resp_bytes = response.serialize();
+        copy_to_c_bytes(resp_bytes, out_response, out_response_len);
+        
         return DIA_OK;
     } catch (...) {
         return DIA_ERR;
