@@ -1,394 +1,518 @@
 #include "dia/dia_c.h"
-#include "dia/dia.hpp"   // umbrella (ecgroup.hpp, etc.)
+#include "../protocol/callstate.hpp"
+#include "../protocol/messages.hpp"
+#include "../protocol/ake.hpp"
+#include "../protocol/rua.hpp"
+#include "../crypto/ecgroup.hpp"
 #include "../helpers.hpp"
 
-#include "../crypto/voprf.hpp"
-#include "../crypto/bbs.hpp"
-#include "../crypto/amf.hpp"
-#include "../crypto/dh.hpp"
-
-#include <vector>
-#include <string>
 #include <cstring>
-#include <algorithm>
-#include <stdexcept>
+#include <string>
+#include <memory>
 
-/* ============================ Common helpers ============================ */
-
+using namespace protocol;
 using ecgroup::Bytes;
-using ecgroup::Scalar;
-using ecgroup::G1Point;
-using ecgroup::G2Point;
 
-static void copy_to_c_buf(const Bytes& vec, unsigned char** buf_out, size_t* len_out) {
-    *len_out = vec.size();
-    *buf_out = new unsigned char[*len_out];
-    if (*len_out) std::memcpy(*buf_out, vec.data(), *len_out);
+/*==============================================================================
+ * Internal wrapper structs for opaque handles
+ *============================================================================*/
+
+struct dia_config_t {
+    ClientConfig config;
+};
+
+struct dia_callstate_t {
+    std::unique_ptr<CallState> state;
+};
+
+struct dia_message_t {
+    ProtocolMessage msg;
+};
+
+/*==============================================================================
+ * Helper functions
+ *============================================================================*/
+
+static char* copy_to_c_string(const std::string& str) {
+    char* result = new char[str.size() + 1];
+    std::memcpy(result, str.c_str(), str.size() + 1);
+    return result;
 }
 
-/* ============================== Init/Free =============================== */
-
-void init_dia() { ecgroup::init_pairing(); }
-void free_byte_buffer(unsigned char* buf) { delete[] buf; }
-
-/* ============================== DH =============================== */
-
-int dia_dh_keygen(unsigned char sk[DIA_FR_LEN],
-                     unsigned char pk[DIA_G1_LEN]) {
-    try {
-        auto kp = dh::keygen();
-        {
-            Bytes b = kp.sk.to_bytes();
-            std::memcpy(sk, b.data(), b.size());
-        }
-        {
-            Bytes b = kp.pk.to_bytes();
-            std::memcpy(pk, b.data(), b.size());
-        }
-        return DIA_OK;
-    } catch (...) { return DIA_ERR; }
+static void copy_to_c_bytes(const Bytes& vec, unsigned char** out, size_t* out_len) {
+    *out_len = vec.size();
+    if (vec.empty()) {
+        *out = nullptr;
+        return;
+    }
+    *out = new unsigned char[*out_len];
+    std::memcpy(*out, vec.data(), *out_len);
 }
 
-int dia_dh_compute_secret(const unsigned char a[DIA_FR_LEN],
-                       const unsigned char B[DIA_G1_LEN],
-                       /*out*/ unsigned char out_element[DIA_G1_LEN]) {
-    try {
-        G1Point point = G1Point::from_bytes(Bytes(B, B + DIA_G1_LEN));
-        Scalar  s = Scalar::from_bytes(Bytes(a, a + DIA_FR_LEN));
-        G1Point E = G1Point::mul(point, s);
-        Bytes   b = E.to_bytes();
-        std::memcpy(out_element, b.data(), b.size());
-        return DIA_OK;
-    } catch (...) { return DIA_ERR; }
+/*==============================================================================
+ * Init / Utilities
+ *============================================================================*/
+
+void dia_init(void) {
+    ecgroup::init_pairing();
 }
 
-/* ================================ VOPRF ================================= */
-
-int dia_voprf_keygen(unsigned char sk[DIA_FR_LEN],
-                     unsigned char pk[DIA_G2_LEN]) {
-    try {
-        auto kp = voprf::keygen();
-        {
-            Bytes b = kp.sk.to_bytes();
-            std::memcpy(sk, b.data(), b.size());
-        }
-        {
-            Bytes b = kp.pk.to_bytes();
-            std::memcpy(pk, b.data(), b.size());
-        }
-        return DIA_OK;
-    } catch (...) { return DIA_ERR; }
+void dia_free_string(char* str) {
+    delete[] str;
 }
 
-int dia_voprf_blind(const unsigned char* input, size_t input_len,
-                    unsigned char out_blinded[DIA_G1_LEN],
-                    unsigned char out_blind[DIA_FR_LEN]) {
-    try {
-        std::string in(reinterpret_cast<const char*>(input), input_len);
-        auto [B, r] = voprf::blind(in);
-        {
-            Bytes b = B.to_bytes();
-            std::memcpy(out_blinded, b.data(), b.size());
-        }
-        {
-            Bytes b = r.to_bytes();
-            std::memcpy(out_blind, b.data(), b.size());
-        }
-        return DIA_OK;
-    } catch (...) { return DIA_ERR; }
+void dia_free_bytes(unsigned char* buf) {
+    delete[] buf;
 }
 
-int dia_voprf_evaluate(const unsigned char blinded[DIA_G1_LEN],
-                       const unsigned char sk[DIA_FR_LEN],
-                       unsigned char out_element[DIA_G1_LEN]) {
-    try {
-        G1Point B = G1Point::from_bytes(Bytes(blinded, blinded + DIA_G1_LEN));
-        Scalar  x = Scalar::from_bytes(Bytes(sk, sk + DIA_FR_LEN));
-        G1Point E = G1Point::mul(B, x);
-        Bytes   b = E.to_bytes();
-        std::memcpy(out_element, b.data(), b.size());
-        return DIA_OK;
-    } catch (...) { return DIA_ERR; }
+void dia_free_remote_party(dia_remote_party_t* rp) {
+    if (rp) {
+        dia_free_string(rp->phone);
+        dia_free_string(rp->name);
+        dia_free_string(rp->logo);
+        delete rp;
+    }
 }
 
-int dia_voprf_unblind(const unsigned char element[DIA_G1_LEN],
-                      const unsigned char blind[DIA_FR_LEN],
-                      unsigned char out_Y[DIA_G1_LEN]) {
+/*==============================================================================
+ * Config API
+ *============================================================================*/
+
+int dia_config_from_env_string(const char* env_content, dia_config_t** out) {
+    if (!env_content || !out) return DIA_ERR_INVALID_ARG;
+    
     try {
-        G1Point E = G1Point::from_bytes(Bytes(element, element + DIA_G1_LEN));
-        Scalar  r = Scalar::from_bytes(Bytes(blind,   blind   + DIA_FR_LEN));
-        G1Point Y = voprf::unblind(E, r);
-        Bytes   b = Y.to_bytes();
-        std::memcpy(out_Y, b.data(), b.size());
+        auto* cfg = new dia_config_t();
+        cfg->config = ClientConfig::from_env_string(std::string(env_content));
+        *out = cfg;
         return DIA_OK;
-    } catch (...) { return DIA_ERR; }
+    } catch (...) {
+        return DIA_ERR_PARSE;
+    }
 }
 
-int dia_voprf_verify(const unsigned char* input, size_t input_len,
-                     const unsigned char Y[DIA_G1_LEN],
-                     const unsigned char pk[DIA_G2_LEN],
-                     int* result) {
-    if (!result) return DIA_ERR_INVALID_ARG;
-    *result = 0;
+int dia_config_to_env_string(const dia_config_t* cfg, char** out) {
+    if (!cfg || !out) return DIA_ERR_INVALID_ARG;
+    
     try {
-        std::string in(reinterpret_cast<const char*>(input), input_len);
-        G1Point Yp = G1Point::from_bytes(Bytes(Y,  Y  + DIA_G1_LEN));
-        G2Point Pk = G2Point::from_bytes(Bytes(pk, pk + DIA_G2_LEN));
-        *result = voprf::verify(in, Yp, Pk) ? 1 : 0;
+        std::string env_str = cfg->config.to_env_string();
+        *out = copy_to_c_string(env_str);
         return DIA_OK;
-    } catch (...) { return DIA_ERR; }
+    } catch (...) {
+        return DIA_ERR;
+    }
 }
 
-int dia_voprf_verify_batch(const unsigned char* const* inputs,
-                           const size_t* input_lens,
-                           size_t n,
-                           const unsigned char* Y_concat,
-                           const unsigned char pk[DIA_G2_LEN],
-                           int* result) {
-    if (!result) return DIA_ERR_INVALID_ARG;
-    *result = 0;
-    try {
-        std::vector<std::string> ins; ins.reserve(n);
-        for (size_t i = 0; i < n; ++i)
-            ins.emplace_back(reinterpret_cast<const char*>(inputs[i]), input_lens[i]);
-
-        std::vector<G1Point> outs; outs.reserve(n);
-        for (size_t i = 0; i < n; ++i) {
-            const unsigned char* yi = Y_concat + i * DIA_G1_LEN;
-            outs.emplace_back(G1Point::from_bytes(Bytes(yi, yi + DIA_G1_LEN)));
-        }
-
-        G2Point Pk = G2Point::from_bytes(Bytes(pk, pk + DIA_G2_LEN));
-        *result = voprf::verify_batch(ins, outs, Pk) ? 1 : 0;
-        return DIA_OK;
-    } catch (...) { return DIA_ERR; }
+void dia_config_destroy(dia_config_t* cfg) {
+    delete cfg;
 }
 
-/* ================================= AMF ================================== */
+/*==============================================================================
+ * CallState API
+ *============================================================================*/
 
-int dia_amf_keygen(unsigned char sk[DIA_FR_LEN],
-                   unsigned char pk[DIA_G1_LEN]) {
+int dia_callstate_create(const dia_config_t* cfg,
+                         const char* phone,
+                         int outgoing,
+                         dia_callstate_t** out) {
+    if (!cfg || !phone || !out) return DIA_ERR_INVALID_ARG;
+    
     try {
-        amf::Params params = amf::Params::Default();
-        amf::KeyPair kp = amf::KeyGen(params);
-        {
-            Bytes b = kp.sk.to_bytes();
-            std::memcpy(sk, b.data(), b.size());
-        }
-        {
-            Bytes b = kp.pk.to_bytes();
-            std::memcpy(pk, b.data(), b.size());
-        }
+        auto* cs = new dia_callstate_t();
+        cs->state = std::make_unique<CallState>(cfg->config, std::string(phone), outgoing != 0);
+        *out = cs;
         return DIA_OK;
-    } catch (...) { return DIA_ERR; }
+    } catch (...) {
+        return DIA_ERR;
+    }
 }
 
-int dia_amf_frank(const unsigned char sk_sender[DIA_FR_LEN],
-                  const unsigned char pk_receiver[DIA_G1_LEN],
-                  const unsigned char pk_judge[DIA_G1_LEN],
-                  const unsigned char* msg, size_t msg_len,
-                  unsigned char** sig_blob,
-                  size_t* sig_blob_len) {
-    try {
-        amf::Params params = amf::Params::Default();
-        Scalar  sks = Scalar::from_bytes(Bytes(sk_sender,   sk_sender   + DIA_FR_LEN));
-        G1Point PKr = G1Point::from_bytes(Bytes(pk_receiver, pk_receiver + DIA_G1_LEN));
-        G1Point PKj = G1Point::from_bytes(Bytes(pk_judge,    pk_judge    + DIA_G1_LEN));
-        std::string m(reinterpret_cast<const char*>(msg), msg_len);
-
-        amf::Signature sig = amf::Frank(sks, PKr, PKj, m, params);
-        copy_to_c_buf(sig.to_bytes(), sig_blob, sig_blob_len);
-        return DIA_OK;
-    } catch (...) { return DIA_ERR; }
+void dia_callstate_destroy(dia_callstate_t* state) {
+    delete state;
 }
 
-int dia_amf_verify(const unsigned char pk_sender[DIA_G1_LEN],
-                   const unsigned char sk_receiver[DIA_FR_LEN],
-                   const unsigned char pk_judge[DIA_G1_LEN],
-                   const unsigned char* msg, size_t msg_len,
-                   const unsigned char* sig_blob, size_t sig_blob_len,
-                   int* result) {
-    if (!result) return DIA_ERR_INVALID_ARG;
-    *result = 0;
+int dia_callstate_get_ake_topic(const dia_callstate_t* state, char** out) {
+    if (!state || !out) return DIA_ERR_INVALID_ARG;
+    
     try {
-        amf::Params params = amf::Params::Default();
-        G1Point PKs = G1Point::from_bytes(Bytes(pk_sender,   pk_sender   + DIA_G1_LEN));
-        Scalar  SKr = Scalar::from_bytes(Bytes(sk_receiver,  sk_receiver + DIA_FR_LEN));
-        G1Point PKj = G1Point::from_bytes(Bytes(pk_judge,    pk_judge    + DIA_G1_LEN));
-        std::string m(reinterpret_cast<const char*>(msg), msg_len);
-
-        amf::Signature sig = amf::Signature::from_bytes(Bytes(sig_blob, sig_blob + sig_blob_len));
-        *result = amf::Verify(PKs, SKr, PKj, m, sig, params) ? 1 : 0;
+        std::string topic = state->state->get_ake_topic();
+        *out = copy_to_c_string(topic);
         return DIA_OK;
-    } catch (...) { return DIA_ERR; }
+    } catch (...) {
+        return DIA_ERR;
+    }
 }
 
-int dia_amf_judge(const unsigned char pk_sender[DIA_G1_LEN],
-                  const unsigned char pk_receiver[DIA_G1_LEN],
-                  const unsigned char sk_judge[DIA_FR_LEN],
-                  const unsigned char* msg, size_t msg_len,
-                  const unsigned char* sig_blob, size_t sig_blob_len,
-                  int* result) {
-    if (!result) return DIA_ERR_INVALID_ARG;
-    *result = 0;
+int dia_callstate_get_current_topic(const dia_callstate_t* state, char** out) {
+    if (!state || !out) return DIA_ERR_INVALID_ARG;
+    
     try {
-        amf::Params params = amf::Params::Default();
-        G1Point PKs = G1Point::from_bytes(Bytes(pk_sender,   pk_sender   + DIA_G1_LEN));
-        G1Point PKr = G1Point::from_bytes(Bytes(pk_receiver, pk_receiver + DIA_G1_LEN));
-        Scalar  SKj = Scalar::from_bytes(Bytes(sk_judge,     sk_judge    + DIA_FR_LEN));
-        std::string m(reinterpret_cast<const char*>(msg), msg_len);
-
-        amf::Signature sig = amf::Signature::from_bytes(Bytes(sig_blob, sig_blob + sig_blob_len));
-        *result = amf::Judge(PKs, PKr, SKj, m, sig, params) ? 1 : 0;
+        std::string topic = state->state->get_current_topic();
+        *out = copy_to_c_string(topic);
         return DIA_OK;
-    } catch (...) { return DIA_ERR; }
+    } catch (...) {
+        return DIA_ERR;
+    }
 }
 
-/* ================================= BBS ================================== */
-
-int dia_bbs_keygen(unsigned char sk[DIA_FR_LEN],
-                   unsigned char pk[DIA_G2_LEN]) {
+int dia_callstate_get_shared_key(const dia_callstate_t* state,
+                                 unsigned char** out,
+                                 size_t* out_len) {
+    if (!state || !out || !out_len) return DIA_ERR_INVALID_ARG;
+    
     try {
-        bbs::Params params = bbs::Params::Default();
-        bbs::KeyPair kp = bbs::keygen(params);
-        {
-            Bytes b = kp.sk.to_bytes();
-            std::memcpy(sk, b.data(), b.size());
-        }
-        {
-            Bytes b = kp.pk.to_bytes();
-            std::memcpy(pk, b.data(), b.size());
-        }
+        copy_to_c_bytes(state->state->shared_key, out, out_len);
         return DIA_OK;
-    } catch (...) { return DIA_ERR; }
+    } catch (...) {
+        return DIA_ERR;
+    }
 }
 
-int dia_bbs_sign(const unsigned char* const* msgs,
-                 const size_t* msg_lens,
-                 size_t n_msgs,
-                 const unsigned char sk[DIA_FR_LEN],
-                 unsigned char** sig_blob,
-                 size_t* sig_blob_len) {
+int dia_callstate_get_ticket(const dia_callstate_t* state,
+                             unsigned char** out,
+                             size_t* out_len) {
+    if (!state || !out || !out_len) return DIA_ERR_INVALID_ARG;
+    
     try {
-        bbs::Params params = bbs::Params::Default();
-
-        std::vector<Scalar> M; M.reserve(n_msgs);
-        for (size_t i = 0; i < n_msgs; ++i) {
-            const unsigned char* m = msgs[i];
-            size_t len = msg_lens[i];
-            M.emplace_back(Scalar::hash_to_scalar(Bytes(m, m + len)));
-        }
-
-        Scalar sk_iss = Scalar::from_bytes(Bytes(sk, sk + DIA_FR_LEN));
-        bbs::Signature sig = bbs::sign(params, sk_iss, M);
-
-        copy_to_c_buf(sig.to_bytes(), sig_blob, sig_blob_len);
+        copy_to_c_bytes(state->state->ticket, out, out_len);
         return DIA_OK;
-    } catch (...) { return DIA_ERR; }
+    } catch (...) {
+        return DIA_ERR;
+    }
 }
 
-int dia_bbs_verify(const unsigned char* const* msgs,
-                   const size_t* msg_lens,
-                   size_t n_msgs,
-                   const unsigned char pk[DIA_G2_LEN],
-                   const unsigned char* sig_blob,
-                   size_t sig_blob_len,
-                   int* result) {
-    if (!result) return DIA_ERR_INVALID_ARG;
-    *result = 0;
+int dia_callstate_get_sender_id(const dia_callstate_t* state, char** out) {
+    if (!state || !out) return DIA_ERR_INVALID_ARG;
+    
     try {
-        bbs::Params params = bbs::Params::Default();
-
-        std::vector<Scalar> M; M.reserve(n_msgs);
-        for (size_t i = 0; i < n_msgs; ++i) {
-            const unsigned char* m = msgs[i];
-            size_t len = msg_lens[i];
-            M.emplace_back(Scalar::hash_to_scalar(Bytes(m, m + len)));
-        }
-
-        G2Point PK = G2Point::from_bytes(Bytes(pk, pk + DIA_G2_LEN));
-        bbs::Signature sig = bbs::Signature::from_bytes(Bytes(sig_blob, sig_blob + sig_blob_len));
-
-        *result = bbs::verify(params, PK, M, sig) ? 1 : 0;
+        *out = copy_to_c_string(state->state->sender_id);
         return DIA_OK;
-    } catch (...) { return DIA_ERR; }
+    } catch (...) {
+        return DIA_ERR;
+    }
 }
 
-int dia_bbs_proof_create(const unsigned char* const* msgs,
-                         const size_t* msg_lens,
-                         size_t n_msgs,
-                         const uint32_t* disclose_idx_1based,
-                         size_t n_disclose,
-                         const unsigned char pk[DIA_G2_LEN],
-                         const unsigned char* sig_blob,
-                         size_t sig_blob_len,
-                         const unsigned char* nonce,
-                         size_t nonce_len,
-                         unsigned char** proof_blob,
-                         size_t* proof_blob_len) {
-    try {
-        bbs::Params params = bbs::Params::Default();
-
-        std::vector<Scalar> M; M.reserve(n_msgs);
-        for (size_t i = 0; i < n_msgs; ++i) {
-            const unsigned char* m = msgs[i];
-            size_t len = msg_lens[i];
-            M.emplace_back(Scalar::hash_to_scalar(Bytes(m, m + len)));
-        }
-
-        std::vector<std::size_t> D; D.reserve(n_disclose);
-        for (size_t i = 0; i < n_disclose; ++i)
-            D.push_back(static_cast<std::size_t>(disclose_idx_1based[i]));
-
-        G2Point PK = G2Point::from_bytes(Bytes(pk, pk + DIA_G2_LEN));
-        bbs::Signature sig = bbs::Signature::from_bytes(Bytes(sig_blob, sig_blob + sig_blob_len));
-        std::string n(reinterpret_cast<const char*>(nonce), nonce_len);
-
-        bbs::SDProof P = bbs::create_proof(params, PK, sig, M, D, n);
-        copy_to_c_buf(P.to_bytes(), proof_blob, proof_blob_len);
-        return DIA_OK;
-    } catch (...) { return DIA_ERR; }
+int dia_callstate_iam_caller(const dia_callstate_t* state) {
+    if (!state) return 0;
+    return state->state->iam_caller() ? 1 : 0;
 }
 
-int dia_bbs_proof_verify(const uint32_t* disclosed_idx_1based,
-                         const unsigned char* const* disclosed_msgs,
-                         const size_t* disclosed_lens,
-                         size_t n_disclosed,
-                         const unsigned char pk[DIA_G2_LEN],
-                         const unsigned char* nonce,
-                         size_t nonce_len,
-                         const unsigned char* proof_blob,
-                         size_t proof_blob_len,
-                         int* result) {
-    if (!result) return DIA_ERR_INVALID_ARG;
-    *result = 0;
+int dia_callstate_iam_recipient(const dia_callstate_t* state) {
+    if (!state) return 0;
+    return state->state->iam_recipient() ? 1 : 0;
+}
+
+int dia_callstate_is_rua_active(const dia_callstate_t* state) {
+    if (!state) return 0;
+    return state->state->is_rua_active() ? 1 : 0;
+}
+
+int dia_callstate_get_remote_party(const dia_callstate_t* state,
+                                   dia_remote_party_t** out) {
+    if (!state || !out) return DIA_ERR_INVALID_ARG;
+    
     try {
-        bbs::SDProof P = bbs::SDProof::from_bytes(Bytes(proof_blob, proof_blob + proof_blob_len));
-
-        std::vector<std::pair<std::size_t, Scalar>> disclosed;
-        disclosed.reserve(n_disclosed);
-
-        std::size_t L = 0; // inferred total messages = max(seen indices)
-        for (size_t i = 0; i < n_disclosed; ++i) {
-            std::size_t idx = static_cast<std::size_t>(disclosed_idx_1based[i]);
-            L = std::max(L, idx);
-            const unsigned char* m = disclosed_msgs[i];
-            size_t len = disclosed_lens[i];
-            disclosed.emplace_back(idx, Scalar::hash_to_scalar(Bytes(m, m + len)));
-        }
-        for (auto j : P.hidden_indices) L = std::max(L, j);
-
-        std::string n(reinterpret_cast<const char*>(nonce), nonce_len);
-        if (n != P.nonce) { *result = 0; return DIA_OK; } // context mismatch → invalid proof
-
-        bbs::Params params = bbs::Params::Default();
-        G2Point PK = G2Point::from_bytes(Bytes(pk, pk + DIA_G2_LEN));
-
-        *result = bbs::verify_proof(params, PK, P, disclosed, L) ? 1 : 0;
+        auto* rp = new dia_remote_party_t();
+        rp->phone = copy_to_c_string(state->state->remote_party.phone);
+        rp->name = copy_to_c_string(state->state->remote_party.name);
+        rp->logo = copy_to_c_string(state->state->remote_party.logo);
+        rp->verified = state->state->remote_party.verified ? 1 : 0;
+        *out = rp;
         return DIA_OK;
-    } catch (const std::runtime_error&) {
-        // Parsing / argument errors
-        return DIA_ERR_INVALID_ARG;
+    } catch (...) {
+        return DIA_ERR;
+    }
+}
+
+int dia_callstate_transition_to_rua(dia_callstate_t* state) {
+    if (!state) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        Bytes rua_topic = derive_rua_topic(*state->state);
+        state->state->transition_to_rua(rua_topic);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR;
+    }
+}
+
+/*==============================================================================
+ * AKE Protocol
+ *============================================================================*/
+
+int dia_ake_init(dia_callstate_t* state) {
+    if (!state) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        init_ake(*state->state);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR;
+    }
+}
+
+int dia_ake_request(dia_callstate_t* state,
+                    unsigned char** out,
+                    size_t* out_len) {
+    if (!state || !out || !out_len) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        Bytes request = ake_request(*state->state);
+        copy_to_c_bytes(request, out, out_len);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR_PROTOCOL;
+    }
+}
+
+int dia_ake_response(dia_callstate_t* state,
+                     const unsigned char* msg_data,
+                     size_t msg_len,
+                     unsigned char** out,
+                     size_t* out_len) {
+    if (!state || !msg_data || !out || !out_len) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        Bytes data(msg_data, msg_data + msg_len);
+        ProtocolMessage msg = ProtocolMessage::deserialize(data);
+        Bytes response = ake_response(*state->state, msg);
+        copy_to_c_bytes(response, out, out_len);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR_PROTOCOL;
+    }
+}
+
+int dia_ake_complete(dia_callstate_t* state,
+                     const unsigned char* msg_data,
+                     size_t msg_len,
+                     unsigned char** out,
+                     size_t* out_len) {
+    if (!state || !msg_data || !out || !out_len) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        Bytes data(msg_data, msg_data + msg_len);
+        ProtocolMessage msg = ProtocolMessage::deserialize(data);
+        Bytes complete = ake_complete(*state->state, msg);
+        copy_to_c_bytes(complete, out, out_len);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR_PROTOCOL;
+    }
+}
+
+int dia_ake_finalize(dia_callstate_t* state,
+                     const unsigned char* msg_data,
+                     size_t msg_len) {
+    if (!state || !msg_data) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        Bytes data(msg_data, msg_data + msg_len);
+        ProtocolMessage msg = ProtocolMessage::deserialize(data);
+        ake_finalize(*state->state, msg);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR_PROTOCOL;
+    }
+}
+
+/*==============================================================================
+ * RUA Protocol
+ *============================================================================*/
+
+int dia_rua_derive_topic(const dia_callstate_t* state, char** out) {
+    if (!state || !out) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        Bytes topic = derive_rua_topic(*state->state);
+        std::string topic_hex = dia::utils::bytes_to_hex(topic);
+        *out = copy_to_c_string(topic_hex);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR;
+    }
+}
+
+int dia_rua_init(dia_callstate_t* state) {
+    if (!state) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        init_rtu(*state->state);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR;
+    }
+}
+
+int dia_rua_request(dia_callstate_t* state,
+                    unsigned char** out,
+                    size_t* out_len) {
+    if (!state || !out || !out_len) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        Bytes request = rua_request(*state->state);
+        copy_to_c_bytes(request, out, out_len);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR_PROTOCOL;
+    }
+}
+
+int dia_rua_response(dia_callstate_t* state,
+                     const unsigned char* msg_data,
+                     size_t msg_len,
+                     unsigned char** out,
+                     size_t* out_len) {
+    if (!state || !msg_data || !out || !out_len) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        Bytes data(msg_data, msg_data + msg_len);
+        ProtocolMessage msg = ProtocolMessage::deserialize(data);
+        Bytes response = rua_response(*state->state, msg);
+        copy_to_c_bytes(response, out, out_len);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR_PROTOCOL;
+    }
+}
+
+int dia_rua_finalize(dia_callstate_t* state,
+                     const unsigned char* msg_data,
+                     size_t msg_len) {
+    if (!state || !msg_data) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        Bytes data(msg_data, msg_data + msg_len);
+        ProtocolMessage msg = ProtocolMessage::deserialize(data);
+        rua_finalize(*state->state, msg);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR_PROTOCOL;
+    }
+}
+
+/*==============================================================================
+ * Message Handling
+ *============================================================================*/
+
+int dia_message_deserialize(const unsigned char* data,
+                            size_t len,
+                            dia_message_t** out) {
+    if (!data || !out) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        auto* m = new dia_message_t();
+        Bytes bytes(data, data + len);
+        m->msg = ProtocolMessage::deserialize(bytes);
+        *out = m;
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR_PARSE;
+    }
+}
+
+void dia_message_destroy(dia_message_t* msg) {
+    delete msg;
+}
+
+int dia_message_get_type(const dia_message_t* msg) {
+    if (!msg) return DIA_MSG_UNSPECIFIED;
+    return static_cast<int>(msg->msg.type);
+}
+
+int dia_message_get_sender_id(const dia_message_t* msg, char** out) {
+    if (!msg || !out) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        *out = copy_to_c_string(msg->msg.sender_id);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR;
+    }
+}
+
+int dia_message_get_topic(const dia_message_t* msg, char** out) {
+    if (!msg || !out) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        *out = copy_to_c_string(msg->msg.topic);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR;
+    }
+}
+
+int dia_message_create_bye(const dia_callstate_t* state,
+                           unsigned char** out,
+                           size_t* out_len) {
+    if (!state || !out || !out_len) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        ProtocolMessage bye = create_bye_message(
+            state->state->sender_id,
+            state->state->get_current_topic()
+        );
+        Bytes serialized = bye.serialize();
+        copy_to_c_bytes(serialized, out, out_len);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR;
+    }
+}
+
+int dia_message_create_heartbeat(const dia_callstate_t* state,
+                                 unsigned char** out,
+                                 size_t* out_len) {
+    if (!state || !out || !out_len) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        ProtocolMessage hb = create_heartbeat_message(
+            state->state->sender_id,
+            state->state->get_current_topic()
+        );
+        Bytes serialized = hb.serialize();
+        copy_to_c_bytes(serialized, out, out_len);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR;
+    }
+}
+
+/*==============================================================================
+ * DR Messaging
+ *============================================================================*/
+
+int dia_dr_encrypt(dia_callstate_t* state,
+                   const unsigned char* plaintext,
+                   size_t plaintext_len,
+                   unsigned char** out,
+                   size_t* out_len) {
+    if (!state || !plaintext || !out || !out_len) return DIA_ERR_INVALID_ARG;
+    if (!state->state->dr_session) return DIA_ERR_PROTOCOL;
+    
+    try {
+        Bytes pt(plaintext, plaintext + plaintext_len);
+        Bytes ct = state->state->dr_session->encrypt(pt);
+        copy_to_c_bytes(ct, out, out_len);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR;
+    }
+}
+
+int dia_dr_decrypt(dia_callstate_t* state,
+                   const unsigned char* ciphertext,
+                   size_t ciphertext_len,
+                   unsigned char** out,
+                   size_t* out_len) {
+    if (!state || !ciphertext || !out || !out_len) return DIA_ERR_INVALID_ARG;
+    if (!state->state->dr_session) return DIA_ERR_PROTOCOL;
+    
+    try {
+        Bytes ct(ciphertext, ciphertext + ciphertext_len);
+        Bytes pt = state->state->dr_session->decrypt(ct);
+        copy_to_c_bytes(pt, out, out_len);
+        return DIA_OK;
     } catch (...) {
         return DIA_ERR;
     }

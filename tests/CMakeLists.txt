@@ -18,7 +18,6 @@ set(TEST_SRC_FILES
     test_amf.cpp
     test_bbs.cpp
     test_dh.cpp
-    test_dia_c.cpp
     test_callstate.cpp
     test_messages.cpp
     test_pke.cpp
@@ -26,6 +25,7 @@ set(TEST_SRC_FILES
     test_ake.cpp
     test_enrollment.cpp
     test_rua.cpp
+    test_c_api.cpp
 )
 add_executable(run_dia_tests ${TEST_SRC_FILES})
 target_include_directories(run_dia_tests PRIVATE 

@@ -14,194 +14,282 @@ extern "C" {
 #define DIA_OK                0
 #define DIA_ERR              -1
 #define DIA_ERR_INVALID_ARG  -2
-#define DIA_ERR_VERIFY_FAIL  -3  /* (kept for ABI compatibility; no longer returned by *_verify) */
+#define DIA_ERR_VERIFY_FAIL  -3
 #define DIA_ERR_ALLOC        -4
+#define DIA_ERR_PARSE        -5
+#define DIA_ERR_PROTOCOL     -6
 
 /*==============================================================================
- * Fixed sizes (BN256 / MCL defaults; compressed encodings)
+ * Message types
  *============================================================================*/
-#define DIA_FR_LEN   32   /* Scalar size */
-#define DIA_G1_LEN   32   /* G1 compressed */
-#define DIA_G2_LEN   64   /* G2 compressed */
-#define DIA_GT_LEN   384  /* GT serialized (not usually needed at FFI) */
+#define DIA_MSG_UNSPECIFIED   0
+#define DIA_MSG_AKE_REQUEST   1
+#define DIA_MSG_AKE_RESPONSE  2
+#define DIA_MSG_AKE_COMPLETE  3
+#define DIA_MSG_RUA_REQUEST   4
+#define DIA_MSG_RUA_RESPONSE  5
+#define DIA_MSG_HEARTBEAT     6
+#define DIA_MSG_BYE           7
+
+/*==============================================================================
+ * Opaque handles
+ *============================================================================*/
+typedef struct dia_config_t dia_config_t;
+typedef struct dia_callstate_t dia_callstate_t;
+typedef struct dia_message_t dia_message_t;
+
+/*==============================================================================
+ * Remote party info (returned by dia_callstate_get_remote_party)
+ *============================================================================*/
+typedef struct dia_remote_party_t {
+    char* phone;
+    char* name;
+    char* logo;
+    int   verified;
+} dia_remote_party_t;
 
 /*==============================================================================
  * Init / Utilities
  *============================================================================*/
 
-/** Initialize the underlying pairing library (MCL). Call once at process start. */
-void init_dia(void);
+/** Initialize the library. Call once at process start. */
+void dia_init(void);
 
-/** Free a heap buffer previously returned by any dia_* function. */
-void free_byte_buffer(unsigned char* buf);
+/** Free a heap-allocated string returned by dia_* functions. */
+void dia_free_string(char* str);
 
-/*==============================================================================
- * Diffie-hellman (PK in G1)
- *============================================================================*/
-/** Generate server key pair: sk (Fr), pk (G1). */
-int dia_dh_keygen(/*out*/ unsigned char sk[DIA_FR_LEN],
-                     /*out*/ unsigned char pk[DIA_G1_LEN]);
+/** Free a heap-allocated byte buffer returned by dia_* functions. */
+void dia_free_bytes(unsigned char* buf);
 
-/** Server: evaluate on a blinded element using sk. */
-int dia_dh_compute_secret(const unsigned char a[DIA_FR_LEN],
-                       const unsigned char B[DIA_G1_LEN],
-                       /*out*/ unsigned char out_element[DIA_G1_LEN]);
+/** Free a remote party struct (and its string members). */
+void dia_free_remote_party(dia_remote_party_t* rp);
 
 /*==============================================================================
- * VOPRF (server PK in G2, outputs in G1)
- *  - Inputs are raw byte strings; hashing is done internally.
+ * Config API
  *============================================================================*/
 
-/** Generate server key pair: sk (Fr), pk (G2). */
-int dia_voprf_keygen(/*out*/ unsigned char sk[DIA_FR_LEN],
-                     /*out*/ unsigned char pk[DIA_G2_LEN]);
-
-/** Client: blind an input. Returns the blinded element (G1) and the blind (Fr). */
-int dia_voprf_blind(const unsigned char* input, size_t input_len,
-                    /*out*/ unsigned char out_blinded[DIA_G1_LEN],
-                    /*out*/ unsigned char out_blind[DIA_FR_LEN]);
-
-/** Server: evaluate on a blinded element using sk. */
-int dia_voprf_evaluate(const unsigned char blinded[DIA_G1_LEN],
-                       const unsigned char sk[DIA_FR_LEN],
-                       /*out*/ unsigned char out_element[DIA_G1_LEN]);
-
-/** Client: unblind server element using the blind to obtain final output Y (G1). */
-int dia_voprf_unblind(const unsigned char element[DIA_G1_LEN],
-                      const unsigned char blind[DIA_FR_LEN],
-                      /*out*/ unsigned char out_Y[DIA_G1_LEN]);
+/**
+ * Parse a ClientConfig from environment variable format string.
+ * Format: KEY=value lines (byte values are hex-encoded).
+ * Returns DIA_OK on success, writes to *out.
+ */
+int dia_config_from_env_string(const char* env_content, dia_config_t** out);
 
 /**
- * Verify a single OPRF output Y against input and server pk.
- * Returns DIA_OK and sets *result to 1 (valid) or 0 (invalid).
+ * Serialize a ClientConfig to environment variable format string.
+ * Caller must free returned string with dia_free_string().
  */
-int dia_voprf_verify(const unsigned char* input, size_t input_len,
-                     const unsigned char Y[DIA_G1_LEN],
-                     const unsigned char pk[DIA_G2_LEN],
-                     /*out*/ int* result);
+int dia_config_to_env_string(const dia_config_t* cfg, char** out);
 
-/**
- * Verify a batch of OPRF outputs in one shot (2 pairings).
- * inputs:      array of pointers to input buffers
- * input_lens:  array of lengths (same length as inputs)
- * n:           number of items
- * Y_concat:    n concatenated G1 elements (n * DIA_G1_LEN bytes)
- * Returns DIA_OK and sets *result to 1 (all valid) or 0 (invalid).
- */
-int dia_voprf_verify_batch(const unsigned char* const* inputs,
-                           const size_t* input_lens,
-                           size_t n,
-                           const unsigned char* Y_concat,
-                           const unsigned char pk[DIA_G2_LEN],
-                           /*out*/ int* result);
+/** Free a config handle. */
+void dia_config_destroy(dia_config_t* cfg);
 
 /*==============================================================================
- * AMF (Asymmetric Message Franking)
- *  - All keys live in G1 (pk = sk * g1), secrets are Fr.
- *  - Signatures are returned as an opaque byte blob; use free_byte_buffer().
+ * CallState API
  *============================================================================*/
 
-/** Key generation for any AMF role (sender/receiver/judge): sk (Fr), pk (G1). */
-int dia_amf_keygen(/*out*/ unsigned char sk[DIA_FR_LEN],
-                   /*out*/ unsigned char pk[DIA_G1_LEN]);
+/**
+ * Create a new CallState for a call.
+ * @param cfg      The client configuration
+ * @param phone    The other party's phone number
+ * @param outgoing 1 for outgoing (caller), 0 for incoming (recipient)
+ * @param out      Output: new CallState handle
+ */
+int dia_callstate_create(const dia_config_t* cfg,
+                         const char* phone,
+                         int outgoing,
+                         dia_callstate_t** out);
+
+/** Free a CallState handle. */
+void dia_callstate_destroy(dia_callstate_t* state);
+
+/** Get the AKE topic (hex string). Caller must free with dia_free_string(). */
+int dia_callstate_get_ake_topic(const dia_callstate_t* state, char** out);
+
+/** Get the current active topic (hex string). Caller must free with dia_free_string(). */
+int dia_callstate_get_current_topic(const dia_callstate_t* state, char** out);
+
+/** Get the shared key. Caller must free with dia_free_bytes(). */
+int dia_callstate_get_shared_key(const dia_callstate_t* state,
+                                 unsigned char** out,
+                                 size_t* out_len);
+
+/** Get the access ticket. Caller must free with dia_free_bytes(). */
+int dia_callstate_get_ticket(const dia_callstate_t* state,
+                             unsigned char** out,
+                             size_t* out_len);
+
+/** Get the sender ID. Caller must free with dia_free_string(). */
+int dia_callstate_get_sender_id(const dia_callstate_t* state, char** out);
+
+/** Returns 1 if caller (outgoing), 0 if recipient. */
+int dia_callstate_iam_caller(const dia_callstate_t* state);
+
+/** Returns 1 if recipient (incoming), 0 if caller. */
+int dia_callstate_iam_recipient(const dia_callstate_t* state);
+
+/** Returns 1 if RUA phase is active, 0 otherwise. */
+int dia_callstate_is_rua_active(const dia_callstate_t* state);
 
 /**
- * Frank (sender): produce an AMF signature over a message for receiver+judge keys.
- * Returns an opaque signature blob (allocated); caller must free with free_byte_buffer().
+ * Get remote party info (populated after RUA completes).
+ * Caller must free with dia_free_remote_party().
  */
-int dia_amf_frank(const unsigned char sk_sender[DIA_FR_LEN],
-                  const unsigned char pk_receiver[DIA_G1_LEN],
-                  const unsigned char pk_judge[DIA_G1_LEN],
-                  const unsigned char* msg, size_t msg_len,
-                  /*out*/ unsigned char** sig_blob,
-                  /*out*/ size_t* sig_blob_len);
+int dia_callstate_get_remote_party(const dia_callstate_t* state,
+                                   dia_remote_party_t** out);
 
-/**
- * Verify (receiver): check signature validity and that it is bound to receiver’s sk.
- * Returns DIA_OK and sets *result to 1 (valid) or 0 (invalid).
- */
-int dia_amf_verify(const unsigned char pk_sender[DIA_G1_LEN],
-                   const unsigned char sk_receiver[DIA_FR_LEN],
-                   const unsigned char pk_judge[DIA_G1_LEN],
-                   const unsigned char* msg, size_t msg_len,
-                   const unsigned char* sig_blob, size_t sig_blob_len,
-                   /*out*/ int* result);
-
-/**
- * Judge (moderator): verify signature and that it is bound to judge’s sk.
- * Returns DIA_OK and sets *result to 1 (valid) or 0 (invalid).
- */
-int dia_amf_judge(const unsigned char pk_sender[DIA_G1_LEN],
-                  const unsigned char pk_receiver[DIA_G1_LEN],
-                  const unsigned char sk_judge[DIA_FR_LEN],
-                  const unsigned char* msg, size_t msg_len,
-                  const unsigned char* sig_blob, size_t sig_blob_len,
-                  /*out*/ int* result);
+/** Transition to RUA topic (updates current topic). */
+int dia_callstate_transition_to_rua(dia_callstate_t* state);
 
 /*==============================================================================
- * BBS (compact signature) + Selective Disclosure (GT-based)
- *  - Issuer pk in G2 (pk = g2^sk), secret is Fr.
- *  - Messages are raw byte strings; hashed to Scalars internally.
- *  - Signatures and proofs are **opaque byte blobs** (allocated).
+ * AKE Protocol (Authenticated Key Exchange)
  *============================================================================*/
 
-/** BBS key generation: sk (Fr), pk (G2). */
-int dia_bbs_keygen(/*out*/ unsigned char sk[DIA_FR_LEN],
-                   /*out*/ unsigned char pk[DIA_G2_LEN]);
+/** Initialize AKE state (generates DH keys, computes topic). */
+int dia_ake_init(dia_callstate_t* state);
 
 /**
- * BBS sign over a list of messages (hashed internally).
- * Output: signature blob `sig_blob` (allocated; free with free_byte_buffer()).
+ * Caller: Create AkeRequest message.
+ * Caller must free output with dia_free_bytes().
  */
-int dia_bbs_sign(const unsigned char* const* msgs,
-                 const size_t* msg_lens,
-                 size_t n_msgs,
-                 const unsigned char sk[DIA_FR_LEN],
-                 /*out*/ unsigned char** sig_blob,
-                 /*out*/ size_t* sig_blob_len);
-
-/** Verify a BBS signature (messages are hashed internally).
- *  Returns DIA_OK and sets *result to 1 (valid) or 0 (invalid).
- */
-int dia_bbs_verify(const unsigned char* const* msgs,
-                   const size_t* msg_lens,
-                   size_t n_msgs,
-                   const unsigned char pk[DIA_G2_LEN],
-                   const unsigned char* sig_blob,
-                   size_t sig_blob_len,
-                   /*out*/ int* result);
+int dia_ake_request(dia_callstate_t* state,
+                    unsigned char** out,
+                    size_t* out_len);
 
 /**
- * Create a selective-disclosure proof (GT-based working variant).
- * Output: proof_blob (allocated opaque), proof_blob_len.
+ * Recipient: Process AkeRequest, create AkeResponse.
+ * @param state    CallState handle
+ * @param msg_data Serialized ProtocolMessage bytes
+ * @param msg_len  Length of msg_data
+ * @param out      Output: serialized AkeResponse
+ * @param out_len  Output: length of response
  */
-int dia_bbs_proof_create(const unsigned char* const* msgs,
-                         const size_t* msg_lens,
-                         size_t n_msgs,
-                         const uint32_t* disclose_idx_1based,
-                         size_t n_disclose,
-                         const unsigned char pk[DIA_G2_LEN],
-                         const unsigned char* sig_blob,
-                         size_t sig_blob_len,
-                         const unsigned char* nonce,
-                         size_t nonce_len,
-                         /*out*/ unsigned char** proof_blob,
-                         /*out*/ size_t* proof_blob_len);
+int dia_ake_response(dia_callstate_t* state,
+                     const unsigned char* msg_data,
+                     size_t msg_len,
+                     unsigned char** out,
+                     size_t* out_len);
 
 /**
- * Verify a selective-disclosure proof.
- * Returns DIA_OK and sets *result to 1 (valid) or 0 (invalid).
+ * Caller: Process AkeResponse, create AkeComplete.
+ * After this, shared key is computed.
  */
-int dia_bbs_proof_verify(const uint32_t* disclosed_idx_1based,
-                         const unsigned char* const* disclosed_msgs,
-                         const size_t* disclosed_lens,
-                         size_t n_disclosed,
-                         const unsigned char pk[DIA_G2_LEN],
-                         const unsigned char* nonce,
-                         size_t nonce_len,
-                         const unsigned char* proof_blob,
-                         size_t proof_blob_len,
-                         /*out*/ int* result);
+int dia_ake_complete(dia_callstate_t* state,
+                     const unsigned char* msg_data,
+                     size_t msg_len,
+                     unsigned char** out,
+                     size_t* out_len);
+
+/**
+ * Recipient: Process AkeComplete, finalize AKE.
+ * After this, shared key is computed.
+ */
+int dia_ake_finalize(dia_callstate_t* state,
+                     const unsigned char* msg_data,
+                     size_t msg_len);
+
+/*==============================================================================
+ * RUA Protocol (Rich User Authentication)
+ *============================================================================*/
+
+/**
+ * Derive RUA topic from shared key.
+ * Caller must free output with dia_free_string().
+ */
+int dia_rua_derive_topic(const dia_callstate_t* state, char** out);
+
+/** Initialize RTU for RUA phase. */
+int dia_rua_init(dia_callstate_t* state);
+
+/**
+ * Caller: Create RuaRequest message.
+ * Caller must free output with dia_free_bytes().
+ */
+int dia_rua_request(dia_callstate_t* state,
+                    unsigned char** out,
+                    size_t* out_len);
+
+/**
+ * Recipient: Process RuaRequest, create RuaResponse.
+ * After this, new shared key is computed and remote_party is populated.
+ */
+int dia_rua_response(dia_callstate_t* state,
+                     const unsigned char* msg_data,
+                     size_t msg_len,
+                     unsigned char** out,
+                     size_t* out_len);
+
+/**
+ * Caller: Process RuaResponse, finalize RUA.
+ * After this, new shared key is computed and remote_party is populated.
+ */
+int dia_rua_finalize(dia_callstate_t* state,
+                     const unsigned char* msg_data,
+                     size_t msg_len);
+
+/*==============================================================================
+ * Message Handling
+ *============================================================================*/
+
+/**
+ * Deserialize a ProtocolMessage from bytes.
+ * Caller must free with dia_message_destroy().
+ */
+int dia_message_deserialize(const unsigned char* data,
+                            size_t len,
+                            dia_message_t** out);
+
+/** Free a message handle. */
+void dia_message_destroy(dia_message_t* msg);
+
+/** Get the message type (DIA_MSG_* constant). */
+int dia_message_get_type(const dia_message_t* msg);
+
+/** Get sender ID. Caller must free with dia_free_string(). */
+int dia_message_get_sender_id(const dia_message_t* msg, char** out);
+
+/** Get topic. Caller must free with dia_free_string(). */
+int dia_message_get_topic(const dia_message_t* msg, char** out);
+
+/**
+ * Create a Bye message.
+ * Caller must free output with dia_free_bytes().
+ */
+int dia_message_create_bye(const dia_callstate_t* state,
+                           unsigned char** out,
+                           size_t* out_len);
+
+/**
+ * Create a Heartbeat message.
+ * Caller must free output with dia_free_bytes().
+ */
+int dia_message_create_heartbeat(const dia_callstate_t* state,
+                                 unsigned char** out,
+                                 size_t* out_len);
+
+/*==============================================================================
+ * DR Messaging (post-RUA secure messaging)
+ *============================================================================*/
+
+/**
+ * Encrypt a message using the Double Ratchet session.
+ * Caller must free output with dia_free_bytes().
+ */
+int dia_dr_encrypt(dia_callstate_t* state,
+                   const unsigned char* plaintext,
+                   size_t plaintext_len,
+                   unsigned char** out,
+                   size_t* out_len);
+
+/**
+ * Decrypt a message using the Double Ratchet session.
+ * Caller must free output with dia_free_bytes().
+ */
+int dia_dr_decrypt(dia_callstate_t* state,
+                   const unsigned char* ciphertext,
+                   size_t ciphertext_len,
+                   unsigned char** out,
+                   size_t* out_len);
 
 #ifdef __cplusplus
 }
