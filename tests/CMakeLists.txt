@@ -19,6 +19,7 @@ set(TEST_SRC_FILES
     test_bbs.cpp
     test_dh.cpp
     test_dia_c.cpp
+    test_callstate.cpp
 )
 add_executable(run_dia_tests ${TEST_SRC_FILES})
 target_include_directories(run_dia_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
