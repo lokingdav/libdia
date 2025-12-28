@@ -272,7 +272,11 @@ TEST_CASE("Enrolled credential can be used for ZK proof", "[enrollment]") {
         config.en_expiration,
         tn_bytes
     });
-    Bytes message2(config.my_name.begin(), config.my_name.end());
+    // message2 = hash(name, logo)
+    Bytes message2 = hash_all({
+        Bytes(config.my_name.begin(), config.my_name.end()),
+        Bytes(config.my_logo.begin(), config.my_logo.end())
+    });
     
     ecgroup::Scalar m1 = ecgroup::Scalar::hash_to_scalar(message1);
     ecgroup::Scalar m2 = ecgroup::Scalar::hash_to_scalar(message2);

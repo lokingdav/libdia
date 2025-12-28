@@ -415,8 +415,11 @@ EnrollmentResponse process_enrollment(
         tn_bytes
     });
     
-    // message2 = name
-    Bytes message2 = to_bytes(request.name);
+    // message2 = hash(name, logo)
+    Bytes message2 = hash_all({
+        to_bytes(request.name),
+        to_bytes(request.logo_url)
+    });
     
     // Create scalars and sign
     Scalar m1 = Scalar::hash_to_scalar(message1);

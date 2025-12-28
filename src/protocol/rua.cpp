@@ -86,8 +86,11 @@ void verify_rtu(
         tn_bytes
     });
     
-    // message2 = name
-    Bytes message2(msg.rtu.name.begin(), msg.rtu.name.end());
+    // message2 = hash(name, logo)
+    Bytes message2 = hash_all({
+        Bytes(msg.rtu.name.begin(), msg.rtu.name.end()),
+        Bytes(msg.rtu.logo.begin(), msg.rtu.logo.end())
+    });
     
     // Convert to scalars
     ecgroup::Scalar m1 = ecgroup::Scalar::hash_to_scalar(message1);

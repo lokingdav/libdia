@@ -30,8 +30,11 @@ Bytes create_zk_proof(const CallState& prover, const Bytes& challenge) {
         tn_bytes
     });
     
-    // message2: name
-    Bytes message2(prover.config.my_name.begin(), prover.config.my_name.end());
+    // message2: hash(name, logo)
+    Bytes message2 = hash_all({
+        Bytes(prover.config.my_name.begin(), prover.config.my_name.end()),
+        Bytes(prover.config.my_logo.begin(), prover.config.my_logo.end())
+    });
     
     // Convert RA public key to G2Point
     ecgroup::G2Point ra_pk = ecgroup::G2Point::from_bytes(prover.config.ra_public_key);

@@ -168,7 +168,11 @@ inline TestClientConfig create_client_config(
         tc.config.en_expiration,
         tn_bytes
     });
-    Bytes message2(name.begin(), name.end());
+    // message2 = hash(name, logo)
+    Bytes message2 = dia::utils::hash_all({
+        Bytes(name.begin(), name.end()),
+        Bytes(tc.config.my_logo.begin(), tc.config.my_logo.end())
+    });
     
     ecgroup::Scalar m1 = ecgroup::Scalar::hash_to_scalar(message1);
     ecgroup::Scalar m2 = ecgroup::Scalar::hash_to_scalar(message2);
