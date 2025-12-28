@@ -44,7 +44,7 @@ From the repo root:
 ./bindings/android/build.sh
 
 # Or specify ABI explicitly (tested for arm64-v8a; x86_64 may fail)
-./bindings/android/build.sh x86_64
+./bindings/android/build.sh arm64-v8a
 ```
 
 The script:

@@ -1,4 +1,14 @@
 # -----------------------------------------------------------------------------
+# Automatically discover all source files recursively
+# -----------------------------------------------------------------------------
+file(GLOB_RECURSE DIA_ALL_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
+
+# Exclude specific files that belong to separate targets
+list(FILTER DIA_ALL_SOURCES EXCLUDE REGEX ".*ecgroup\\.cpp$")
+list(FILTER DIA_ALL_SOURCES EXCLUDE REGEX ".*dia_c\\.cpp$")
+list(FILTER DIA_ALL_SOURCES EXCLUDE REGEX ".*dia_jni\\.cpp$")
+
+# -----------------------------------------------------------------------------
 # Cryptographic Shim Library (ecgroup)
 # -----------------------------------------------------------------------------
 add_library(ecgroup
@@ -22,12 +32,7 @@ target_link_libraries(ecgroup PUBLIC mcl)
 # Main C++ Library (dia)
 # -----------------------------------------------------------------------------
 add_library(dia
-  helpers.cpp
-  dia.cpp
-  voprf.cpp
-  amf.cpp
-  bbs.cpp
-  dh.cpp
+  ${DIA_ALL_SOURCES}
 )
 
 target_include_directories(dia
