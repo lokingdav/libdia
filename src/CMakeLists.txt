@@ -42,9 +42,10 @@ target_include_directories(dia
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/crypto>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/protocol>
     $<INSTALL_INTERFACE:include>
+    ${SODIUM_INCLUDE_DIRS}
 )
 
-target_link_libraries(dia PUBLIC ecgroup)
+target_link_libraries(dia PUBLIC ecgroup ${SODIUM_LIBRARIES})
 
 
 # -----------------------------------------------------------------------------

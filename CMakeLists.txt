@@ -65,6 +65,10 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(mcl)
 
+# Find libsodium (must be installed on the system)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SODIUM REQUIRED libsodium)
+
 # -----------------------------------------------------------------------------
 # Subdirectory Processing
 # -----------------------------------------------------------------------------
