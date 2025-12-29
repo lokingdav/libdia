@@ -389,6 +389,42 @@ int dia_enrollment_process(const dia_server_config_t* config,
                            unsigned char** response_out,
                            size_t* response_len);
 
+/*==============================================================================
+ * Key Generation API (for testing/server setup)
+ *============================================================================*/
+
+/**
+ * Generate a new server configuration with fresh keys.
+ * This generates all required cryptographic keys for enrollment processing.
+ * @param duration_days  Enrollment duration in days
+ * @param config_out     Output: server config handle with generated keys
+ */
+int dia_server_config_generate(int duration_days, dia_server_config_t** config_out);
+
+/**
+ * Get the CI public key from a server config.
+ * Caller must free with dia_free_bytes().
+ */
+int dia_server_config_get_ci_public_key(const dia_server_config_t* config,
+                                        unsigned char** key_out,
+                                        size_t* key_len);
+
+/**
+ * Get the AT public key from a server config.
+ * Caller must free with dia_free_bytes().
+ */
+int dia_server_config_get_at_public_key(const dia_server_config_t* config,
+                                        unsigned char** key_out,
+                                        size_t* key_len);
+
+/**
+ * Get the AMF public key from a server config.
+ * Caller must free with dia_free_bytes().
+ */
+int dia_server_config_get_amf_public_key(const dia_server_config_t* config,
+                                         unsigned char** key_out,
+                                         size_t* key_len);
+
 #ifdef __cplusplus
 }
 #endif

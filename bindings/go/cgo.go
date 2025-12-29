@@ -1,19 +1,21 @@
+// Package dia provides Go bindings for the DIA (Digital Identity Authentication) protocol.
+//
+// The package provides a high-level API for:
+//   - Enrollment: registering users with the system
+//   - Call authentication: AKE (Authenticated Key Exchange) and RUA (Rich User Authentication)
+//   - Secure messaging: Double Ratchet encrypted communication
+//
+// Building for development (from source):
+//
+//	PKG_CONFIG_PATH=/path/to/libdia/build go build
+//
+// The PKG_CONFIG_PATH should point to the directory containing dia-dev.pc
 package dia
 
 /*
-#cgo pkg-config: --static dia
+#cgo pkg-config: dia-dev
 #include <dia/dia_c.h>
 #include <stdlib.h>
-
-// Expose compile-time sizes as enum constants so cgo can read them.
-enum {
-  DIA_FR_LEN_ = DIA_FR_LEN,
-  DIA_G1_LEN_ = DIA_G1_LEN,
-  DIA_G2_LEN_ = DIA_G2_LEN,
-  DIA_GT_LEN_ = DIA_GT_LEN,
-  DIA_OK_     = DIA_OK,
-  DIA_ERR_    = DIA_ERR
-};
 */
 import "C"
 import (
@@ -23,484 +25,692 @@ import (
 	"unsafe"
 )
 
-// one-time init of the underlying library (not exported)
+// Error codes
+var (
+	ErrInvalidArg   = errors.New("dia: invalid argument")
+	ErrVerifyFailed = errors.New("dia: verification failed")
+	ErrAlloc        = errors.New("dia: allocation failed")
+	ErrParse        = errors.New("dia: parse error")
+	ErrProtocol     = errors.New("dia: protocol error")
+	ErrUnknown      = errors.New("dia: unknown error")
+)
+
+// Message types
+const (
+	MsgUnspecified = C.DIA_MSG_UNSPECIFIED
+	MsgAKERequest  = C.DIA_MSG_AKE_REQUEST
+	MsgAKEResponse = C.DIA_MSG_AKE_RESPONSE
+	MsgAKEComplete = C.DIA_MSG_AKE_COMPLETE
+	MsgRUARequest  = C.DIA_MSG_RUA_REQUEST
+	MsgRUAResponse = C.DIA_MSG_RUA_RESPONSE
+	MsgHeartbeat   = C.DIA_MSG_HEARTBEAT
+	MsgBye         = C.DIA_MSG_BYE
+)
+
+// one-time init of the underlying library
 var initOnce sync.Once
 
 func ensureInit() {
 	initOnce.Do(func() {
-		C.init_dia()
+		C.dia_init()
 	})
 }
 
-// Size constants (from C macros via enum bridge)
-const (
-	FrLen = int(C.DIA_FR_LEN_)
-	G1Len = int(C.DIA_G1_LEN_)
-	G2Len = int(C.DIA_G2_LEN_)
-	GTLen = int(C.DIA_GT_LEN_)
-)
-
-func rcErr(op string, rc C.int) error {
-	if rc == C.DIA_OK_ {
+func rcErr(rc C.int) error {
+	switch rc {
+	case C.DIA_OK:
 		return nil
+	case C.DIA_ERR_INVALID_ARG:
+		return ErrInvalidArg
+	case C.DIA_ERR_VERIFY_FAIL:
+		return ErrVerifyFailed
+	case C.DIA_ERR_ALLOC:
+		return ErrAlloc
+	case C.DIA_ERR_PARSE:
+		return ErrParse
+	case C.DIA_ERR_PROTOCOL:
+		return ErrProtocol
+	default:
+		return fmt.Errorf("%w: rc=%d", ErrUnknown, int(rc))
 	}
-	return fmt.Errorf("%s failed: rc=%d", op, int(rc))
 }
 
-/* ================================ Diffie Helman ================================ */
+// ============================================================================
+// Config - Client configuration for DIA protocol
+// ============================================================================
 
-// DHKeygen -> (sk Fr, pk G1)
-func DHKeygen() (a []byte, A []byte, err error) {
-	ensureInit()
-	a = make([]byte, FrLen)
-	A = make([]byte, G1Len)
-	rc := C.dia_dh_keygen((*C.uchar)(&a[0]), (*C.uchar)(&A[0]))
-	return a, A, rcErr("dia_dh_keygen", rc)
+// Config represents a DIA client configuration.
+type Config struct {
+	handle *C.dia_config_t
 }
 
-// DHComputeSecret -> element G1
-func DHComputeSecret(a, B []byte) (secret []byte, err error) {
+// ConfigFromEnv parses a ClientConfig from environment variable format string.
+// The format is KEY=value lines where byte values are hex-encoded.
+func ConfigFromEnv(envContent string) (*Config, error) {
 	ensureInit()
-	if len(B) != G1Len || len(a) != FrLen {
-		return nil, errors.New("DHComputeSecret: bad input sizes")
-	}
-	secret = make([]byte, G1Len)
-	rc := C.dia_dh_compute_secret((*C.uchar)(&a[0]), (*C.uchar)(&B[0]),
-		(*C.uchar)(&secret[0]))
-	return secret, rcErr("dia_dh_compute_secret", rc)
-}
+	cStr := C.CString(envContent)
+	defer C.free(unsafe.Pointer(cStr))
 
-/* ================================ VOPRF ================================ */
-
-// VOPRFKeygen -> (sk Fr, pk G2)
-func VOPRFKeygen() (sk []byte, pk []byte, err error) {
-	ensureInit()
-	sk = make([]byte, FrLen)
-	pk = make([]byte, G2Len)
-	rc := C.dia_voprf_keygen((*C.uchar)(&sk[0]), (*C.uchar)(&pk[0]))
-	return sk, pk, rcErr("dia_voprf_keygen", rc)
-}
-
-// VOPRFBlind -> (blinded G1, blind Fr)
-func VOPRFBlind(input []byte) (blinded []byte, blind []byte, err error) {
-	ensureInit()
-	blinded = make([]byte, G1Len)
-	blind = make([]byte, FrLen)
-	var inPtr *C.uchar
-	if len(input) > 0 {
-		inPtr = (*C.uchar)(unsafe.Pointer(&input[0]))
-	}
-	rc := C.dia_voprf_blind(inPtr, C.size_t(len(input)),
-		(*C.uchar)(&blinded[0]), (*C.uchar)(&blind[0]))
-	return blinded, blind, rcErr("dia_voprf_blind", rc)
-}
-
-// VOPRFEvaluate -> element G1
-func VOPRFEvaluate(blinded, sk []byte) (element []byte, err error) {
-	ensureInit()
-	if len(blinded) != G1Len || len(sk) != FrLen {
-		return nil, errors.New("VOPRFEvaluate: bad input sizes")
-	}
-	element = make([]byte, G1Len)
-	rc := C.dia_voprf_evaluate((*C.uchar)(&blinded[0]), (*C.uchar)(&sk[0]),
-		(*C.uchar)(&element[0]))
-	return element, rcErr("dia_voprf_evaluate", rc)
-}
-
-// VOPRFUnblind -> Y G1
-func VOPRFUnblind(element, blind []byte) (Y []byte, err error) {
-	ensureInit()
-	if len(element) != G1Len || len(blind) != FrLen {
-		return nil, errors.New("VOPRFUnblind: bad input sizes")
-	}
-	Y = make([]byte, G1Len)
-	rc := C.dia_voprf_unblind((*C.uchar)(&element[0]), (*C.uchar)(&blind[0]),
-		(*C.uchar)(&Y[0]))
-	return Y, rcErr("dia_voprf_unblind", rc)
-}
-
-// VOPRFVerify checks e(H(input), pk) == e(Y, g2).
-// Returns (valid, error). error is non-nil only for API/parse failures.
-func VOPRFVerify(input, Y, pk []byte) (bool, error) {
-	ensureInit()
-	if len(Y) != G1Len || len(pk) != G2Len {
-		return false, errors.New("VOPRFVerify: bad input sizes")
-	}
-	var inPtr *C.uchar
-	if len(input) > 0 {
-		inPtr = (*C.uchar)(unsafe.Pointer(&input[0]))
-	}
-	var res C.int
-	rc := C.dia_voprf_verify(inPtr, C.size_t(len(input)),
-		(*C.uchar)(&Y[0]), (*C.uchar)(&pk[0]), &res)
-	return res == 1, rcErr("dia_voprf_verify", rc)
-}
-
-// VOPRFVerifyBatch verifies N inputs with N outputs Y using 2 pairings.
-// Returns (allValid, error).
-func VOPRFVerifyBatch(inputs [][]byte, Ys [][]byte, pk []byte) (bool, error) {
-	ensureInit()
-	if len(pk) != G2Len {
-		return false, errors.New("VOPRFVerifyBatch: bad pk size")
-	}
-	if len(inputs) != len(Ys) {
-		return false, errors.New("VOPRFVerifyBatch: len mismatch")
-	}
-	n := len(inputs)
-
-	// Build C arrays for inputs (pointers + lengths)
-	cPtrs := C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(uintptr(0))))
-	defer C.free(cPtrs)
-	cLens := C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(C.size_t(0))))
-	defer C.free(cLens)
-
-	ptrs := (*[1 << 30]*C.uchar)(cPtrs)[:n:n]
-	lens := (*[1 << 30]C.size_t)(cLens)[:n:n]
-
-	for i := 0; i < n; i++ {
-		if len(inputs[i]) == 0 {
-			ptrs[i] = nil
-			lens[i] = 0
-		} else {
-			ptrs[i] = (*C.uchar)(unsafe.Pointer(&inputs[i][0]))
-			lens[i] = C.size_t(len(inputs[i]))
-		}
-	}
-
-	// Concatenate Ys into one buffer
-	Ycat := make([]byte, n*G1Len)
-	for i := 0; i < n; i++ {
-		if len(Ys[i]) != G1Len {
-			return false, errors.New("VOPRFVerifyBatch: bad Y size")
-		}
-		copy(Ycat[i*G1Len:(i+1)*G1Len], Ys[i])
-	}
-
-	var res C.int
-	rc := C.dia_voprf_verify_batch(
-		(**C.uchar)(cPtrs),
-		(*C.size_t)(cLens),
-		C.size_t(n),
-		(*C.uchar)(&Ycat[0]),
-		(*C.uchar)(&pk[0]),
-		&res,
-	)
-	return res == 1, rcErr("dia_voprf_verify_batch", rc)
-}
-
-/* ================================= AMF ================================= */
-
-// AMFKeygen -> (sk Fr, pk G1)
-func AMFKeygen() (sk []byte, pk []byte, err error) {
-	ensureInit()
-	sk = make([]byte, FrLen)
-	pk = make([]byte, G1Len)
-	rc := C.dia_amf_keygen((*C.uchar)(&sk[0]), (*C.uchar)(&pk[0]))
-	return sk, pk, rcErr("dia_amf_keygen", rc)
-}
-
-// AMFFrank -> sig blob (opaque)
-func AMFFrank(skSender, pkReceiver, pkJudge, msg []byte) (sig []byte, err error) {
-	ensureInit()
-	if len(skSender) != FrLen || len(pkReceiver) != G1Len || len(pkJudge) != G1Len {
-		return nil, errors.New("AMFFrank: bad input sizes")
-	}
-	var outPtr *C.uchar
-	var outLen C.size_t
-	var msgPtr *C.uchar
-	if len(msg) > 0 {
-		msgPtr = (*C.uchar)(unsafe.Pointer(&msg[0]))
-	}
-	rc := C.dia_amf_frank(
-		(*C.uchar)(&skSender[0]),
-		(*C.uchar)(&pkReceiver[0]),
-		(*C.uchar)(&pkJudge[0]),
-		msgPtr, C.size_t(len(msg)),
-		(**C.uchar)(unsafe.Pointer(&outPtr)),
-		(*C.size_t)(unsafe.Pointer(&outLen)),
-	)
-	if err = rcErr("dia_amf_frank", rc); err != nil {
+	var handle *C.dia_config_t
+	rc := C.dia_config_from_env_string(cStr, &handle)
+	if err := rcErr(rc); err != nil {
 		return nil, err
 	}
-	// Copy out and free C buffer
-	sig = C.GoBytes(unsafe.Pointer(outPtr), C.int(outLen))
-	C.free_byte_buffer(outPtr)
-	return sig, nil
+	return &Config{handle: handle}, nil
 }
 
-// AMFVerify (receiver) — checks U==sk_r*B and verifies transcripts.
-// Returns (valid, error).
-func AMFVerify(pkSender, skReceiver, pkJudge, msg, sig []byte) (bool, error) {
-	ensureInit()
-	if len(pkSender) != G1Len || len(skReceiver) != FrLen || len(pkJudge) != G1Len {
-		return false, errors.New("AMFVerify: bad key sizes")
+// ToEnv serializes the config to environment variable format string.
+func (c *Config) ToEnv() (string, error) {
+	if c == nil || c.handle == nil {
+		return "", ErrInvalidArg
 	}
-	var msgPtr *C.uchar
-	if len(msg) > 0 {
-		msgPtr = (*C.uchar)(unsafe.Pointer(&msg[0]))
+	var out *C.char
+	rc := C.dia_config_to_env_string(c.handle, &out)
+	if err := rcErr(rc); err != nil {
+		return "", err
 	}
-	var res C.int
-	rc := C.dia_amf_verify(
-		(*C.uchar)(&pkSender[0]),
-		(*C.uchar)(&skReceiver[0]),
-		(*C.uchar)(&pkJudge[0]),
-		msgPtr, C.size_t(len(msg)),
-		(*C.uchar)(unsafe.Pointer(&sig[0])), C.size_t(len(sig)),
-		&res,
-	)
-	return res == 1, rcErr("dia_amf_verify", rc)
+	defer C.dia_free_string(out)
+	return C.GoString(out), nil
 }
 
-// AMFJudge (moderator) — checks T==sk_j*A and verifies transcripts.
-// Returns (valid, error).
-func AMFJudge(pkSender, pkReceiver, skJudge, msg, sig []byte) (bool, error) {
-	ensureInit()
-	if len(pkSender) != G1Len || len(pkReceiver) != G1Len || len(skJudge) != FrLen {
-		return false, errors.New("AMFJudge: bad key sizes")
+// Close releases the config resources.
+func (c *Config) Close() {
+	if c != nil && c.handle != nil {
+		C.dia_config_destroy(c.handle)
+		c.handle = nil
 	}
-	var msgPtr *C.uchar
-	if len(msg) > 0 {
-		msgPtr = (*C.uchar)(unsafe.Pointer(&msg[0]))
-	}
-	var res C.int
-	rc := C.dia_amf_judge(
-		(*C.uchar)(&pkSender[0]),
-		(*C.uchar)(&pkReceiver[0]),
-		(*C.uchar)(&skJudge[0]),
-		msgPtr, C.size_t(len(msg)),
-		(*C.uchar)(unsafe.Pointer(&sig[0])), C.size_t(len(sig)),
-		&res,
-	)
-	return res == 1, rcErr("dia_amf_judge", rc)
 }
 
-/* ================================= BBS ================================= */
+// ============================================================================
+// RemoteParty - Information about the remote party in a call
+// ============================================================================
 
-// BBSKeygen -> (sk Fr, pk G2)
-func BBSKeygen() (sk []byte, pk []byte, err error) {
-	ensureInit()
-	sk = make([]byte, FrLen)
-	pk = make([]byte, G2Len)
-	rc := C.dia_bbs_keygen((*C.uchar)(&sk[0]), (*C.uchar)(&pk[0]))
-	return sk, pk, rcErr("dia_bbs_keygen", rc)
+// RemoteParty contains verified information about the other party.
+type RemoteParty struct {
+	Phone    string
+	Name     string
+	Logo     string
+	Verified bool
 }
 
-// BBSSign -> opaque signature blob
-func BBSSign(msgs [][]byte, sk []byte) (sig []byte, err error) {
+// ============================================================================
+// CallState - State for a single call session
+// ============================================================================
+
+// CallState manages the state for a DIA call session.
+type CallState struct {
+	handle *C.dia_callstate_t
+}
+
+// NewCallState creates a new call state for a call session.
+// Set outgoing=true for outgoing calls (caller), false for incoming (recipient).
+func NewCallState(cfg *Config, phone string, outgoing bool) (*CallState, error) {
 	ensureInit()
-	if len(sk) != FrLen {
-		return nil, errors.New("BBSSign: bad sk size")
-	}
-	n := len(msgs)
-
-	// Build C arrays for inputs (pointers+lengths)
-	cPtrs := C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(uintptr(0))))
-	defer C.free(cPtrs)
-	cLens := C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(C.size_t(0))))
-	defer C.free(cLens)
-
-	ptrs := (*[1 << 30]*C.uchar)(cPtrs)[:n:n]
-	lens := (*[1 << 30]C.size_t)(cLens)[:n:n]
-
-	for i := 0; i < n; i++ {
-		if len(msgs[i]) == 0 {
-			ptrs[i] = nil
-			lens[i] = 0
-		} else {
-			ptrs[i] = (*C.uchar)(unsafe.Pointer(&msgs[i][0]))
-			lens[i] = C.size_t(len(msgs[i]))
-		}
+	if cfg == nil || cfg.handle == nil {
+		return nil, ErrInvalidArg
 	}
 
-	// Out blob
-	var outPtr *C.uchar
-	var outLen C.size_t
+	cPhone := C.CString(phone)
+	defer C.free(unsafe.Pointer(cPhone))
 
-	rc := C.dia_bbs_sign(
-		(**C.uchar)(cPtrs), (*C.size_t)(cLens), C.size_t(n),
-		(*C.uchar)(&sk[0]),
-		(**C.uchar)(unsafe.Pointer(&outPtr)),
-		(*C.size_t)(unsafe.Pointer(&outLen)),
-	)
-	if err = rcErr("dia_bbs_sign", rc); err != nil {
+	outgoingInt := 0
+	if outgoing {
+		outgoingInt = 1
+	}
+
+	var handle *C.dia_callstate_t
+	rc := C.dia_callstate_create(cfg.handle, cPhone, C.int(outgoingInt), &handle)
+	if err := rcErr(rc); err != nil {
 		return nil, err
 	}
-	sig = C.GoBytes(unsafe.Pointer(outPtr), C.int(outLen))
-	C.free_byte_buffer(outPtr)
-	return sig, nil
+	return &CallState{handle: handle}, nil
 }
 
-// BBSVerify — verify signature over messages with issuer pk.
-// Returns (valid, error).
-func BBSVerify(msgs [][]byte, pk, sig []byte) (bool, error) {
-	ensureInit()
-	if len(pk) != G2Len {
-		return false, errors.New("BBSVerify: bad pk size")
+// Close releases the call state resources.
+func (cs *CallState) Close() {
+	if cs != nil && cs.handle != nil {
+		C.dia_callstate_destroy(cs.handle)
+		cs.handle = nil
 	}
-
-	n := len(msgs)
-	var cPtrs, cLens unsafe.Pointer
-	if n > 0 {
-		cPtrs = C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(uintptr(0))))
-		defer C.free(cPtrs)
-		cLens = C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(C.size_t(0))))
-		defer C.free(cLens)
-
-		ptrs := (*[1 << 30]*C.uchar)(cPtrs)[:n:n]
-		lens := (*[1 << 30]C.size_t)(cLens)[:n:n]
-
-		for i := 0; i < n; i++ {
-			if len(msgs[i]) == 0 {
-				ptrs[i] = nil
-				lens[i] = 0
-			} else {
-				ptrs[i] = (*C.uchar)(unsafe.Pointer(&msgs[i][0]))
-				lens[i] = C.size_t(len(msgs[i]))
-			}
-		}
-	}
-
-	var res C.int
-	rc := C.dia_bbs_verify(
-		(**C.uchar)(cPtrs), (*C.size_t)(cLens), C.size_t(n),
-		(*C.uchar)(&pk[0]),
-		(*C.uchar)(unsafe.Pointer(&sig[0])), C.size_t(len(sig)),
-		&res,
-	)
-	return res == 1, rcErr("dia_bbs_verify", rc)
 }
 
-// BBSCreateProof → proof blob (opaque) for selective disclosure.
-// discloseIdx: 1-based indices of messages to reveal (can be empty).
-// Requires issuer pk + opaque signature blob (not (A,e)).
-func BBSCreateProof(msgs [][]byte, discloseIdx []uint32,
-	pk, sig, nonce []byte) (proof []byte, err error) {
-
-	ensureInit()
-	if len(pk) != G2Len {
-		return nil, errors.New("BBSCreateProof: bad pk size")
+// AKETopic returns the AKE topic as a hex string.
+func (cs *CallState) AKETopic() (string, error) {
+	if cs == nil || cs.handle == nil {
+		return "", ErrInvalidArg
 	}
-
-	n := len(msgs)
-	cPtrs := C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(uintptr(0))))
-	defer C.free(cPtrs)
-	cLens := C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(C.size_t(0))))
-	defer C.free(cLens)
-
-	ptrs := (*[1 << 30]*C.uchar)(cPtrs)[:n:n]
-	lens := (*[1 << 30]C.size_t)(cLens)[:n:n]
-
-	for i := 0; i < n; i++ {
-		if len(msgs[i]) == 0 {
-			ptrs[i] = nil
-			lens[i] = 0
-		} else {
-			ptrs[i] = (*C.uchar)(unsafe.Pointer(&msgs[i][0]))
-			lens[i] = C.size_t(len(msgs[i]))
-		}
+	var out *C.char
+	rc := C.dia_callstate_get_ake_topic(cs.handle, &out)
+	if err := rcErr(rc); err != nil {
+		return "", err
 	}
+	defer C.dia_free_string(out)
+	return C.GoString(out), nil
+}
 
-	// Disclose indices array (can be nil)
-	var dPtr *C.uint32_t
-	if len(discloseIdx) > 0 {
-		dPtr = (*C.uint32_t)(C.malloc(C.size_t(len(discloseIdx)) * C.size_t(unsafe.Sizeof(C.uint32_t(0)))))
-		defer C.free(unsafe.Pointer(dPtr))
-		dst := (*[1 << 30]C.uint32_t)(unsafe.Pointer(dPtr))[:len(discloseIdx):len(discloseIdx)]
-		for i, v := range discloseIdx {
-			dst[i] = C.uint32_t(v)
-		}
+// CurrentTopic returns the current active topic as a hex string.
+func (cs *CallState) CurrentTopic() (string, error) {
+	if cs == nil || cs.handle == nil {
+		return "", ErrInvalidArg
 	}
-
-	// Nonce
-	var noncePtr *C.uchar
-	if len(nonce) > 0 {
-		noncePtr = (*C.uchar)(unsafe.Pointer(&nonce[0]))
+	var out *C.char
+	rc := C.dia_callstate_get_current_topic(cs.handle, &out)
+	if err := rcErr(rc); err != nil {
+		return "", err
 	}
+	defer C.dia_free_string(out)
+	return C.GoString(out), nil
+}
 
-	// Out blob
-	var outPtr *C.uchar
+// SharedKey returns the shared key (available after AKE completes).
+func (cs *CallState) SharedKey() ([]byte, error) {
+	if cs == nil || cs.handle == nil {
+		return nil, ErrInvalidArg
+	}
+	var out *C.uchar
 	var outLen C.size_t
-
-	rc := C.dia_bbs_proof_create(
-		(**C.uchar)(cPtrs), (*C.size_t)(cLens), C.size_t(n),
-		dPtr, C.size_t(len(discloseIdx)),
-		(*C.uchar)(&pk[0]),
-		(*C.uchar)(unsafe.Pointer(&sig[0])), C.size_t(len(sig)),
-		noncePtr, C.size_t(len(nonce)),
-		(**C.uchar)(unsafe.Pointer(&outPtr)),
-		(*C.size_t)(unsafe.Pointer(&outLen)),
-	)
-	if err = rcErr("dia_bbs_proof_create", rc); err != nil {
+	rc := C.dia_callstate_get_shared_key(cs.handle, &out, &outLen)
+	if err := rcErr(rc); err != nil {
 		return nil, err
 	}
-	proof = C.GoBytes(unsafe.Pointer(outPtr), C.int(outLen))
-	C.free_byte_buffer(outPtr)
-	return proof, nil
+	defer C.dia_free_bytes(out)
+	return C.GoBytes(unsafe.Pointer(out), C.int(outLen)), nil
 }
 
-// BBSVerifyProof verifies a selective disclosure proof.
-// disclosedIdx: 1-based indices of disclosed messages (can be empty)
-// disclosedMsgs: must align 1:1 with disclosedIdx (can be empty)
-// Returns (valid, error).
-func BBSVerifyProof(disclosedIdx []uint32, disclosedMsgs [][]byte,
-	pk, nonce, proof []byte) (bool, error) {
+// Ticket returns the access ticket.
+func (cs *CallState) Ticket() ([]byte, error) {
+	if cs == nil || cs.handle == nil {
+		return nil, ErrInvalidArg
+	}
+	var out *C.uchar
+	var outLen C.size_t
+	rc := C.dia_callstate_get_ticket(cs.handle, &out, &outLen)
+	if err := rcErr(rc); err != nil {
+		return nil, err
+	}
+	defer C.dia_free_bytes(out)
+	return C.GoBytes(unsafe.Pointer(out), C.int(outLen)), nil
+}
 
+// SenderID returns the sender ID for this party.
+func (cs *CallState) SenderID() (string, error) {
+	if cs == nil || cs.handle == nil {
+		return "", ErrInvalidArg
+	}
+	var out *C.char
+	rc := C.dia_callstate_get_sender_id(cs.handle, &out)
+	if err := rcErr(rc); err != nil {
+		return "", err
+	}
+	defer C.dia_free_string(out)
+	return C.GoString(out), nil
+}
+
+// IsCaller returns true if this is an outgoing call (we are the caller).
+func (cs *CallState) IsCaller() bool {
+	if cs == nil || cs.handle == nil {
+		return false
+	}
+	return C.dia_callstate_iam_caller(cs.handle) == 1
+}
+
+// IsRecipient returns true if this is an incoming call (we are the recipient).
+func (cs *CallState) IsRecipient() bool {
+	if cs == nil || cs.handle == nil {
+		return false
+	}
+	return C.dia_callstate_iam_recipient(cs.handle) == 1
+}
+
+// IsRUAActive returns true if the RUA phase is active.
+func (cs *CallState) IsRUAActive() bool {
+	if cs == nil || cs.handle == nil {
+		return false
+	}
+	return C.dia_callstate_is_rua_active(cs.handle) == 1
+}
+
+// RemoteParty returns information about the remote party (populated after RUA).
+func (cs *CallState) RemoteParty() (*RemoteParty, error) {
+	if cs == nil || cs.handle == nil {
+		return nil, ErrInvalidArg
+	}
+	var out *C.dia_remote_party_t
+	rc := C.dia_callstate_get_remote_party(cs.handle, &out)
+	if err := rcErr(rc); err != nil {
+		return nil, err
+	}
+	defer C.dia_free_remote_party(out)
+	return &RemoteParty{
+		Phone:    C.GoString(out.phone),
+		Name:     C.GoString(out.name),
+		Logo:     C.GoString(out.logo),
+		Verified: out.verified == 1,
+	}, nil
+}
+
+// TransitionToRUA updates the current topic to the RUA topic.
+func (cs *CallState) TransitionToRUA() error {
+	if cs == nil || cs.handle == nil {
+		return ErrInvalidArg
+	}
+	return rcErr(C.dia_callstate_transition_to_rua(cs.handle))
+}
+
+// ============================================================================
+// AKE Protocol (Authenticated Key Exchange)
+// ============================================================================
+
+// AKEInit initializes the AKE state (generates DH keys, computes topic).
+func (cs *CallState) AKEInit() error {
+	if cs == nil || cs.handle == nil {
+		return ErrInvalidArg
+	}
+	return rcErr(C.dia_ake_init(cs.handle))
+}
+
+// AKERequest creates an AKE request message (caller side).
+func (cs *CallState) AKERequest() ([]byte, error) {
+	if cs == nil || cs.handle == nil {
+		return nil, ErrInvalidArg
+	}
+	var out *C.uchar
+	var outLen C.size_t
+	rc := C.dia_ake_request(cs.handle, &out, &outLen)
+	if err := rcErr(rc); err != nil {
+		return nil, err
+	}
+	defer C.dia_free_bytes(out)
+	return C.GoBytes(unsafe.Pointer(out), C.int(outLen)), nil
+}
+
+// AKEResponse processes an AKE request and creates a response (recipient side).
+func (cs *CallState) AKEResponse(request []byte) ([]byte, error) {
+	if cs == nil || cs.handle == nil || len(request) == 0 {
+		return nil, ErrInvalidArg
+	}
+	var out *C.uchar
+	var outLen C.size_t
+	rc := C.dia_ake_response(cs.handle,
+		(*C.uchar)(&request[0]), C.size_t(len(request)),
+		&out, &outLen)
+	if err := rcErr(rc); err != nil {
+		return nil, err
+	}
+	defer C.dia_free_bytes(out)
+	return C.GoBytes(unsafe.Pointer(out), C.int(outLen)), nil
+}
+
+// AKEComplete processes an AKE response and creates the completion message (caller side).
+// After this, the shared key is computed.
+func (cs *CallState) AKEComplete(response []byte) ([]byte, error) {
+	if cs == nil || cs.handle == nil || len(response) == 0 {
+		return nil, ErrInvalidArg
+	}
+	var out *C.uchar
+	var outLen C.size_t
+	rc := C.dia_ake_complete(cs.handle,
+		(*C.uchar)(&response[0]), C.size_t(len(response)),
+		&out, &outLen)
+	if err := rcErr(rc); err != nil {
+		return nil, err
+	}
+	defer C.dia_free_bytes(out)
+	return C.GoBytes(unsafe.Pointer(out), C.int(outLen)), nil
+}
+
+// AKEFinalize processes the AKE complete message (recipient side).
+// After this, the shared key is computed.
+func (cs *CallState) AKEFinalize(complete []byte) error {
+	if cs == nil || cs.handle == nil || len(complete) == 0 {
+		return ErrInvalidArg
+	}
+	return rcErr(C.dia_ake_finalize(cs.handle,
+		(*C.uchar)(&complete[0]), C.size_t(len(complete))))
+}
+
+// ============================================================================
+// RUA Protocol (Rich User Authentication)
+// ============================================================================
+
+// RUADeriveTopic derives the RUA topic from the shared key.
+func (cs *CallState) RUADeriveTopic() (string, error) {
+	if cs == nil || cs.handle == nil {
+		return "", ErrInvalidArg
+	}
+	var out *C.char
+	rc := C.dia_rua_derive_topic(cs.handle, &out)
+	if err := rcErr(rc); err != nil {
+		return "", err
+	}
+	defer C.dia_free_string(out)
+	return C.GoString(out), nil
+}
+
+// RUAInit initializes the RTU for RUA phase.
+func (cs *CallState) RUAInit() error {
+	if cs == nil || cs.handle == nil {
+		return ErrInvalidArg
+	}
+	return rcErr(C.dia_rua_init(cs.handle))
+}
+
+// RUARequest creates a RUA request message (caller side).
+func (cs *CallState) RUARequest() ([]byte, error) {
+	if cs == nil || cs.handle == nil {
+		return nil, ErrInvalidArg
+	}
+	var out *C.uchar
+	var outLen C.size_t
+	rc := C.dia_rua_request(cs.handle, &out, &outLen)
+	if err := rcErr(rc); err != nil {
+		return nil, err
+	}
+	defer C.dia_free_bytes(out)
+	return C.GoBytes(unsafe.Pointer(out), C.int(outLen)), nil
+}
+
+// RUAResponse processes a RUA request and creates a response (recipient side).
+// After this, the new shared key is computed and remote party is populated.
+func (cs *CallState) RUAResponse(request []byte) ([]byte, error) {
+	if cs == nil || cs.handle == nil || len(request) == 0 {
+		return nil, ErrInvalidArg
+	}
+	var out *C.uchar
+	var outLen C.size_t
+	rc := C.dia_rua_response(cs.handle,
+		(*C.uchar)(&request[0]), C.size_t(len(request)),
+		&out, &outLen)
+	if err := rcErr(rc); err != nil {
+		return nil, err
+	}
+	defer C.dia_free_bytes(out)
+	return C.GoBytes(unsafe.Pointer(out), C.int(outLen)), nil
+}
+
+// RUAFinalize processes the RUA response (caller side).
+// After this, the new shared key is computed and remote party is populated.
+func (cs *CallState) RUAFinalize(response []byte) error {
+	if cs == nil || cs.handle == nil || len(response) == 0 {
+		return ErrInvalidArg
+	}
+	return rcErr(C.dia_rua_finalize(cs.handle,
+		(*C.uchar)(&response[0]), C.size_t(len(response))))
+}
+
+// ============================================================================
+// DR Messaging (Double Ratchet encrypted messaging)
+// ============================================================================
+
+// Encrypt encrypts a message using the Double Ratchet session (available after RUA).
+func (cs *CallState) Encrypt(plaintext []byte) ([]byte, error) {
+	if cs == nil || cs.handle == nil {
+		return nil, ErrInvalidArg
+	}
+	var ptPtr *C.uchar
+	if len(plaintext) > 0 {
+		ptPtr = (*C.uchar)(&plaintext[0])
+	}
+	var out *C.uchar
+	var outLen C.size_t
+	rc := C.dia_dr_encrypt(cs.handle, ptPtr, C.size_t(len(plaintext)), &out, &outLen)
+	if err := rcErr(rc); err != nil {
+		return nil, err
+	}
+	defer C.dia_free_bytes(out)
+	return C.GoBytes(unsafe.Pointer(out), C.int(outLen)), nil
+}
+
+// Decrypt decrypts a message using the Double Ratchet session (available after RUA).
+func (cs *CallState) Decrypt(ciphertext []byte) ([]byte, error) {
+	if cs == nil || cs.handle == nil || len(ciphertext) == 0 {
+		return nil, ErrInvalidArg
+	}
+	var out *C.uchar
+	var outLen C.size_t
+	rc := C.dia_dr_decrypt(cs.handle,
+		(*C.uchar)(&ciphertext[0]), C.size_t(len(ciphertext)),
+		&out, &outLen)
+	if err := rcErr(rc); err != nil {
+		return nil, err
+	}
+	defer C.dia_free_bytes(out)
+	return C.GoBytes(unsafe.Pointer(out), C.int(outLen)), nil
+}
+
+// ============================================================================
+// Message Handling
+// ============================================================================
+
+// Message represents a DIA protocol message.
+type Message struct {
+	handle *C.dia_message_t
+}
+
+// ParseMessage deserializes a protocol message from bytes.
+func ParseMessage(data []byte) (*Message, error) {
 	ensureInit()
-	if len(pk) != G2Len {
-		return false, errors.New("BBSVerifyProof: bad pk size")
+	if len(data) == 0 {
+		return nil, ErrInvalidArg
 	}
-	if len(disclosedMsgs) != len(disclosedIdx) {
-		return false, errors.New("BBSVerifyProof: index/msg mismatch")
+	var handle *C.dia_message_t
+	rc := C.dia_message_deserialize((*C.uchar)(&data[0]), C.size_t(len(data)), &handle)
+	if err := rcErr(rc); err != nil {
+		return nil, err
 	}
-	n := len(disclosedMsgs)
+	return &Message{handle: handle}, nil
+}
 
-	// C arrays for disclosed messages (pointers+lengths)
-	var dPtrs unsafe.Pointer
-	var dLens unsafe.Pointer
-	if n > 0 {
-		dPtrs = C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(uintptr(0))))
-		defer C.free(dPtrs)
-		dLens = C.malloc(C.size_t(n) * C.size_t(unsafe.Sizeof(C.size_t(0))))
-		defer C.free(dLens)
+// Close releases the message resources.
+func (m *Message) Close() {
+	if m.handle != nil {
+		C.dia_message_destroy(m.handle)
+		m.handle = nil
+	}
+}
 
-		ptrs := (*[1 << 30]*C.uchar)(dPtrs)[:n:n]
-		lens := (*[1 << 30]C.size_t)(dLens)[:n:n]
-		for i := 0; i < n; i++ {
-			if len(disclosedMsgs[i]) == 0 {
-				ptrs[i] = nil
-				lens[i] = 0
-			} else {
-				ptrs[i] = (*C.uchar)(unsafe.Pointer(&disclosedMsgs[i][0]))
-				lens[i] = C.size_t(len(disclosedMsgs[i]))
-			}
-		}
+// Type returns the message type (MsgAKERequest, MsgRUAResponse, etc.)
+func (m *Message) Type() int {
+	if m.handle == nil {
+		return MsgUnspecified
+	}
+	return int(C.dia_message_get_type(m.handle))
+}
+
+// SenderID returns the sender ID from the message.
+func (m *Message) SenderID() (string, error) {
+	if m.handle == nil {
+		return "", ErrInvalidArg
+	}
+	var out *C.char
+	rc := C.dia_message_get_sender_id(m.handle, &out)
+	if err := rcErr(rc); err != nil {
+		return "", err
+	}
+	defer C.dia_free_string(out)
+	return C.GoString(out), nil
+}
+
+// Topic returns the topic from the message.
+func (m *Message) Topic() (string, error) {
+	if m.handle == nil {
+		return "", ErrInvalidArg
+	}
+	var out *C.char
+	rc := C.dia_message_get_topic(m.handle, &out)
+	if err := rcErr(rc); err != nil {
+		return "", err
+	}
+	defer C.dia_free_string(out)
+	return C.GoString(out), nil
+}
+
+// CreateByeMessage creates a Bye message for ending a call.
+func (cs *CallState) CreateByeMessage() ([]byte, error) {
+	if cs.handle == nil {
+		return nil, ErrInvalidArg
+	}
+	var out *C.uchar
+	var outLen C.size_t
+	rc := C.dia_message_create_bye(cs.handle, &out, &outLen)
+	if err := rcErr(rc); err != nil {
+		return nil, err
+	}
+	defer C.dia_free_bytes(out)
+	return C.GoBytes(unsafe.Pointer(out), C.int(outLen)), nil
+}
+
+// CreateHeartbeatMessage creates a Heartbeat message for keep-alive.
+func (cs *CallState) CreateHeartbeatMessage() ([]byte, error) {
+	if cs.handle == nil {
+		return nil, ErrInvalidArg
+	}
+	var out *C.uchar
+	var outLen C.size_t
+	rc := C.dia_message_create_heartbeat(cs.handle, &out, &outLen)
+	if err := rcErr(rc); err != nil {
+		return nil, err
+	}
+	defer C.dia_free_bytes(out)
+	return C.GoBytes(unsafe.Pointer(out), C.int(outLen)), nil
+}
+
+// ============================================================================
+// Enrollment (Client-side)
+// ============================================================================
+
+// EnrollmentKeys holds the keys generated during enrollment (kept by client).
+type EnrollmentKeys struct {
+	handle *C.dia_enrollment_keys_t
+}
+
+// CreateEnrollmentRequest creates an enrollment request with all necessary keys.
+// Returns the keys (keep for finalization) and the serialized request to send.
+func CreateEnrollmentRequest(phone, name, logoURL string, numTickets int) (*EnrollmentKeys, []byte, error) {
+	ensureInit()
+
+	cPhone := C.CString(phone)
+	defer C.free(unsafe.Pointer(cPhone))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	cLogo := C.CString(logoURL)
+	defer C.free(unsafe.Pointer(cLogo))
+
+	var keysHandle *C.dia_enrollment_keys_t
+	var requestData *C.uchar
+	var requestLen C.size_t
+
+	rc := C.dia_enrollment_create_request(cPhone, cName, cLogo,
+		C.size_t(numTickets), &keysHandle, &requestData, &requestLen)
+	if err := rcErr(rc); err != nil {
+		return nil, nil, err
+	}
+	defer C.dia_free_bytes(requestData)
+
+	request := C.GoBytes(unsafe.Pointer(requestData), C.int(requestLen))
+	return &EnrollmentKeys{handle: keysHandle}, request, nil
+}
+
+// Close releases the enrollment keys resources.
+func (ek *EnrollmentKeys) Close() {
+	if ek != nil && ek.handle != nil {
+		C.dia_enrollment_keys_destroy(ek.handle)
+		ek.handle = nil
+	}
+}
+
+// FinalizeEnrollment finalizes enrollment using the server response.
+// Returns a Config ready for use in calls.
+func FinalizeEnrollment(keys *EnrollmentKeys, response []byte, phone, name, logoURL string) (*Config, error) {
+	if keys == nil || keys.handle == nil || len(response) == 0 {
+		return nil, ErrInvalidArg
 	}
 
-	// Disclosed indices (can be nil)
-	var idxPtr *C.uint32_t
-	if len(disclosedIdx) > 0 {
-		idxPtr = (*C.uint32_t)(C.malloc(C.size_t(len(disclosedIdx)) * C.size_t(unsafe.Sizeof(C.uint32_t(0)))))
-		defer C.free(unsafe.Pointer(idxPtr))
-		dst := (*[1 << 30]C.uint32_t)(unsafe.Pointer(idxPtr))[:len(disclosedIdx):len(disclosedIdx)]
-		for i, v := range disclosedIdx {
-			dst[i] = C.uint32_t(v)
-		}
+	cPhone := C.CString(phone)
+	defer C.free(unsafe.Pointer(cPhone))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	cLogo := C.CString(logoURL)
+	defer C.free(unsafe.Pointer(cLogo))
+
+	var cfgHandle *C.dia_config_t
+	rc := C.dia_enrollment_finalize(keys.handle,
+		(*C.uchar)(&response[0]), C.size_t(len(response)),
+		cPhone, cName, cLogo, &cfgHandle)
+	if err := rcErr(rc); err != nil {
+		return nil, err
+	}
+	return &Config{handle: cfgHandle}, nil
+}
+
+// ============================================================================
+// Enrollment (Server-side)
+// ============================================================================
+
+// ServerConfig holds server-side configuration for processing enrollments.
+type ServerConfig struct {
+	handle *C.dia_server_config_t
+}
+
+// NewServerConfig creates a server configuration for enrollment processing.
+func NewServerConfig(ciPrivateKey, ciPublicKey, atPrivateKey, atPublicKey, amfPublicKey []byte, durationDays int) (*ServerConfig, error) {
+	ensureInit()
+
+	if len(ciPrivateKey) == 0 || len(ciPublicKey) == 0 ||
+		len(atPrivateKey) == 0 || len(atPublicKey) == 0 ||
+		len(amfPublicKey) == 0 {
+		return nil, ErrInvalidArg
 	}
 
-	// Nonce
-	var noncePtr *C.uchar
-	if len(nonce) > 0 {
-		noncePtr = (*C.uchar)(unsafe.Pointer(&nonce[0]))
+	var handle *C.dia_server_config_t
+	rc := C.dia_server_config_create(
+		(*C.uchar)(&ciPrivateKey[0]), C.size_t(len(ciPrivateKey)),
+		(*C.uchar)(&ciPublicKey[0]), C.size_t(len(ciPublicKey)),
+		(*C.uchar)(&atPrivateKey[0]), C.size_t(len(atPrivateKey)),
+		(*C.uchar)(&atPublicKey[0]), C.size_t(len(atPublicKey)),
+		(*C.uchar)(&amfPublicKey[0]), C.size_t(len(amfPublicKey)),
+		C.int(durationDays), &handle)
+	if err := rcErr(rc); err != nil {
+		return nil, err
+	}
+	return &ServerConfig{handle: handle}, nil
+}
+
+// Close releases the server config resources.
+func (sc *ServerConfig) Close() {
+	if sc != nil && sc.handle != nil {
+		C.dia_server_config_destroy(sc.handle)
+		sc.handle = nil
+	}
+}
+
+// GenerateServerConfig generates a new server configuration with fresh cryptographic keys.
+// This is useful for testing or for servers that need to generate their own keys.
+func GenerateServerConfig(durationDays int) (*ServerConfig, error) {
+	ensureInit()
+
+	var handle *C.dia_server_config_t
+	rc := C.dia_server_config_generate(C.int(durationDays), &handle)
+	if err := rcErr(rc); err != nil {
+		return nil, err
+	}
+	return &ServerConfig{handle: handle}, nil
+}
+
+// ProcessEnrollment processes a client enrollment request and returns the response.
+func (sc *ServerConfig) ProcessEnrollment(request []byte) ([]byte, error) {
+	if sc == nil || sc.handle == nil || len(request) == 0 {
+		return nil, ErrInvalidArg
 	}
 
-	var res C.int
-	rc := C.dia_bbs_proof_verify(
-		idxPtr,
-		(**C.uchar)(dPtrs), (*C.size_t)(dLens), C.size_t(n),
-		(*C.uchar)(&pk[0]),
-		noncePtr, C.size_t(len(nonce)),
-		(*C.uchar)(unsafe.Pointer(&proof[0])), C.size_t(len(proof)),
-		&res,
-	)
-	return res == 1, rcErr("dia_bbs_proof_verify", rc)
+	var responseData *C.uchar
+	var responseLen C.size_t
+	rc := C.dia_enrollment_process(sc.handle,
+		(*C.uchar)(&request[0]), C.size_t(len(request)),
+		&responseData, &responseLen)
+	if err := rcErr(rc); err != nil {
+		return nil, err
+	}
+	defer C.dia_free_bytes(responseData)
+	return C.GoBytes(unsafe.Pointer(responseData), C.int(responseLen)), nil
 }

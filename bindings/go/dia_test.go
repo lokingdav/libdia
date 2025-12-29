@@ -2,333 +2,512 @@ package dia
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 )
 
-func s2b(s string) []byte { return []byte(s) }
+// Shared server config for all tests (avoids key generation overhead)
+var testServerConfig *ServerConfig
 
-// ------------------------------- DH --------------------------------
-func TestDH_EndToEnd(t *testing.T) {
-	a, A, err := DHKeygen()
+func init() {
+	var err error
+	testServerConfig, err = GenerateServerConfig(30)
 	if err != nil {
-		t.Fatalf("DHKeygen for (a, A): %v", err)
-	}
-	b, B, err := DHKeygen()
-	if err != nil {
-		t.Fatalf("DHKeygen for (b, B): %v", err)
-	}
-
-	sec1, err := DHComputeSecret(a, B)
-	if err != nil {
-		t.Fatalf("DHComputeSecret: %v", err)
-	}
-
-	sec2, err := DHComputeSecret(b, A)
-	if err != nil {
-		t.Fatalf("DHComputeSecret: %v", err)
-	}
-
-	for i := range sec1 {
-		if sec1[i] != sec2[i] {
-			t.Fatalf("Computed secrets do not match")
-		}
+		panic("failed to generate test server config: " + err.Error())
 	}
 }
 
-// ------------------------------- VOPRF --------------------------------
+// Helper to create a test configuration using enrollment
+func createTestConfig(t *testing.T, phone, name string) *Config {
+	t.Helper()
 
-func TestVOPRF_EndToEnd(t *testing.T) {
-	// Keygen (server)
-	sk, pk, err := VOPRFKeygen()
+	// Client creates enrollment request
+	keys, request, err := CreateEnrollmentRequest(phone, name, "https://example.com/logo.png", 1)
 	if err != nil {
-		t.Fatalf("VOPRFKeygen: %v", err)
+		t.Fatalf("CreateEnrollmentRequest: %v", err)
 	}
+	defer keys.Close()
 
-	input := s2b("hello voprf")
-
-	// Client blinds
-	blinded, blind, err := VOPRFBlind(input)
+	// Server processes request
+	response, err := testServerConfig.ProcessEnrollment(request)
 	if err != nil {
-		t.Fatalf("VOPRFBlind: %v", err)
-	}
-
-	// Server evaluates
-	elem, err := VOPRFEvaluate(blinded, sk)
-	if err != nil {
-		t.Fatalf("VOPRFEvaluate: %v", err)
+		t.Fatalf("ProcessEnrollment: %v", err)
 	}
 
-	// Client unblinds, then verifies result against server pk
-	Y, err := VOPRFUnblind(elem, blind)
+	// Client finalizes enrollment
+	cfg, err := FinalizeEnrollment(keys, response, phone, name, "https://example.com/logo.png")
 	if err != nil {
-		t.Fatalf("VOPRFUnblind: %v", err)
-	}
-	ok, err := VOPRFVerify(input, Y, pk)
-	if err != nil {
-		t.Fatalf("VOPRFVerify: %v", err)
-	}
-	if !ok {
-		t.Fatalf("VOPRFVerify: expected valid")
+		t.Fatalf("FinalizeEnrollment: %v", err)
 	}
 
-	// Negative: wrong input should report invalid (no API error)
-	ok, err = VOPRFVerify(s2b("different"), Y, pk)
+	return cfg
+}
+
+// ============================================================================
+// Config Tests
+// ============================================================================
+
+func TestConfig_EnrollmentFlow(t *testing.T) {
+	cfg := createTestConfig(t, "+1234567890", "Test User")
+	defer cfg.Close()
+
+	// Verify config can be serialized
+	envStr, err := cfg.ToEnv()
 	if err != nil {
-		t.Fatalf("VOPRFVerify(different): unexpected error: %v", err)
+		t.Fatalf("ToEnv: %v", err)
 	}
-	if ok {
-		t.Fatalf("VOPRFVerify should be invalid on different input")
+
+	if !strings.Contains(envStr, "+1234567890") {
+		t.Error("Config should contain phone number")
+	}
+	if !strings.Contains(envStr, "Test User") {
+		t.Error("Config should contain name")
 	}
 }
 
-func TestVOPRF_Batch16(t *testing.T) {
-	sk, pk, err := VOPRFKeygen()
+func TestConfig_RoundTrip(t *testing.T) {
+	cfg1 := createTestConfig(t, "+1555123456", "Alice")
+	defer cfg1.Close()
+
+	// Serialize
+	envStr, err := cfg1.ToEnv()
 	if err != nil {
-		t.Fatalf("VOPRFKeygen: %v", err)
+		t.Fatalf("ToEnv: %v", err)
 	}
 
-	const N = 16
-	inputs := make([][]byte, N)
-	Ys := make([][]byte, N)
-
-	for i := 0; i < N; i++ {
-		inputs[i] = s2b("msg-" + string(rune('A'+i)))
-		blinded, blind, err := VOPRFBlind(inputs[i])
-		if err != nil {
-			t.Fatalf("VOPRFBlind[%d]: %v", i, err)
-		}
-		elem, err := VOPRFEvaluate(blinded, sk)
-		if err != nil {
-			t.Fatalf("VOPRFEvaluate[%d]: %v", i, err)
-		}
-		Y, err := VOPRFUnblind(elem, blind)
-		if err != nil {
-			t.Fatalf("VOPRFUnblind[%d]: %v", i, err)
-		}
-		Ys[i] = Y
-	}
-
-	ok, err := VOPRFVerifyBatch(inputs, Ys, pk)
+	// Parse back
+	cfg2, err := ConfigFromEnv(envStr)
 	if err != nil {
-		t.Fatalf("VOPRFVerifyBatch: %v", err)
+		t.Fatalf("ConfigFromEnv: %v", err)
 	}
-	if !ok {
-		t.Fatalf("VOPRFVerifyBatch: expected all valid")
+	defer cfg2.Close()
+
+	// Serialize again and compare
+	envStr2, err := cfg2.ToEnv()
+	if err != nil {
+		t.Fatalf("ToEnv (round 2): %v", err)
+	}
+
+	if envStr != envStr2 {
+		t.Error("Config round-trip failed")
 	}
 }
 
-// -------------------------------- AMF ---------------------------------
+// ============================================================================
+// CallState Tests
+// ============================================================================
 
-func TestAMF_EndToEnd_And_Negatives(t *testing.T) {
-	// Parties: Sender (S), Receiver (R), Judge (J)
-	Ssk, Spk, err := AMFKeygen()
-	if err != nil {
-		t.Fatalf("AMFKeygen S: %v", err)
-	}
-	Rsk, Rpk, err := AMFKeygen()
-	if err != nil {
-		t.Fatalf("AMFKeygen R: %v", err)
-	}
-	Jsk, Jpk, err := AMFKeygen()
-	if err != nil {
-		t.Fatalf("AMFKeygen J: %v", err)
-	}
+func TestCallState_Creation(t *testing.T) {
+	cfg := createTestConfig(t, "+1111111111", "Caller")
+	defer cfg.Close()
 
-	msg := s2b("hello AMF")
-
-	// Frank
-	sig, err := AMFFrank(Ssk, Rpk, Jpk, msg)
+	cs, err := NewCallState(cfg, "+2222222222", true)
 	if err != nil {
-		t.Fatalf("AMFFrank: %v", err)
+		t.Fatalf("NewCallState: %v", err)
 	}
-	if len(sig) == 0 {
-		t.Fatalf("AMFFrank: empty signature blob")
+	defer cs.Close()
+
+	if !cs.IsCaller() {
+		t.Error("Should be caller")
+	}
+	if cs.IsRecipient() {
+		t.Error("Should not be recipient")
 	}
 
-	// Verify & Judge succeed
-	ok, err := AMFVerify(Spk, Rsk, Jpk, msg, sig)
-	if err != nil {
-		t.Fatalf("AMFVerify: %v", err)
-	}
-	if !ok {
-		t.Fatalf("AMFVerify: expected valid")
-	}
-	ok, err = AMFJudge(Spk, Rpk, Jsk, msg, sig)
-	if err != nil {
-		t.Fatalf("AMFJudge: %v", err)
-	}
-	if !ok {
-		t.Fatalf("AMFJudge: expected valid")
+	// AKE topic requires AKEInit to be called first
+	if err := cs.AKEInit(); err != nil {
+		t.Fatalf("AKEInit: %v", err)
 	}
 
-	// Negative: different message
-	ok, err = AMFVerify(Spk, Rsk, Jpk, s2b("different"), sig)
+	topic, err := cs.AKETopic()
 	if err != nil {
-		t.Fatalf("AMFVerify(different): %v", err)
+		t.Fatalf("AKETopic: %v", err)
 	}
-	if ok {
-		t.Fatalf("AMFVerify should be invalid with different message")
-	}
-	ok, err = AMFJudge(Spk, Rpk, Jsk, s2b("different"), sig)
-	if err != nil {
-		t.Fatalf("AMFJudge(different): %v", err)
-	}
-	if ok {
-		t.Fatalf("AMFJudge should be invalid with different message")
-	}
-
-	// Negative: wrong sender pk
-	_, Spk2, err := AMFKeygen()
-	if err != nil {
-		t.Fatalf("AMFKeygen S2: %v", err)
-	}
-	ok, err = AMFVerify(Spk2, Rsk, Jpk, msg, sig)
-	if err != nil {
-		t.Fatalf("AMFVerify(wrong sender): %v", err)
-	}
-	if ok {
-		t.Fatalf("AMFVerify should be invalid with wrong sender pk")
-	}
-	ok, err = AMFJudge(Spk2, Rpk, Jsk, msg, sig)
-	if err != nil {
-		t.Fatalf("AMFJudge(wrong sender): %v", err)
-	}
-	if ok {
-		t.Fatalf("AMFJudge should be invalid with wrong sender pk")
-	}
-
-	// Negative: wrong receiver secret → Verify invalid, Judge still valid
-	Rsk2, Rpk2, err := AMFKeygen()
-	if err != nil {
-		t.Fatalf("AMFKeygen R2: %v", err)
-	}
-	ok, err = AMFVerify(Spk, Rsk2, Jpk, msg, sig)
-	if err != nil {
-		t.Fatalf("AMFVerify(wrong receiver sk): %v", err)
-	}
-	if ok {
-		t.Fatalf("AMFVerify should be invalid with wrong receiver secret")
-	}
-	ok, err = AMFJudge(Spk, Rpk, Jsk, msg, sig)
-	if err != nil {
-		t.Fatalf("AMFJudge (independent of sk_r) unexpected error: %v", err)
-	}
-	if !ok {
-		t.Fatalf("AMFJudge should still pass with wrong receiver secret")
-	}
-	_ = Rpk2 // keep for symmetry
-
-	// Negative: tamper blob → must be invalid (either parse error OR parsed-invalid)
-	tam := append([]byte(nil), sig...)
-	tam[len(tam)/2] ^= 0x01
-	if bytes.Equal(tam, sig) {
-		t.Fatal("tamper failed (equal blobs)")
-	}
-	ok, err = AMFVerify(Spk, Rsk, Jpk, msg, tam)
-	if err == nil && ok {
-		t.Fatalf("AMFVerify should fail on tampered blob")
+	if topic == "" {
+		t.Error("AKE topic should not be empty")
 	}
 }
 
-// -------------------------------- BBS ----------------------------------
+func TestCallState_RecipientRole(t *testing.T) {
+	cfg := createTestConfig(t, "+3333333333", "Recipient")
+	defer cfg.Close()
 
-func makeMsgs(L int) [][]byte {
-	out := make([][]byte, L)
-	for i := 0; i < L; i++ {
-		out[i] = s2b("m" + string(rune('0'+(i%10))))
+	cs, err := NewCallState(cfg, "+4444444444", false)
+	if err != nil {
+		t.Fatalf("NewCallState: %v", err)
 	}
-	return out
+	defer cs.Close()
+
+	if cs.IsCaller() {
+		t.Error("Should not be caller")
+	}
+	if !cs.IsRecipient() {
+		t.Error("Should be recipient")
+	}
 }
 
-func TestBBS_Sign_Verify_Proofs(t *testing.T) {
-	// Keygen
-	sk, pk, err := BBSKeygen()
+// ============================================================================
+// AKE Protocol Tests
+// ============================================================================
+
+func TestAKE_FullExchange(t *testing.T) {
+	// Setup caller and recipient configs
+	callerCfg := createTestConfig(t, "+1111111111", "Alice")
+	defer callerCfg.Close()
+	recipientCfg := createTestConfig(t, "+2222222222", "Bob")
+	defer recipientCfg.Close()
+
+	// Create call states
+	callerState, err := NewCallState(callerCfg, "+2222222222", true)
 	if err != nil {
-		t.Fatalf("BBSKeygen: %v", err)
+		t.Fatalf("NewCallState (caller): %v", err)
+	}
+	defer callerState.Close()
+
+	recipientState, err := NewCallState(recipientCfg, "+1111111111", false)
+	if err != nil {
+		t.Fatalf("NewCallState (recipient): %v", err)
+	}
+	defer recipientState.Close()
+
+	// Initialize AKE
+	if err := callerState.AKEInit(); err != nil {
+		t.Fatalf("AKEInit (caller): %v", err)
+	}
+	if err := recipientState.AKEInit(); err != nil {
+		t.Fatalf("AKEInit (recipient): %v", err)
 	}
 
-	// Messages
-	const L = 8
-	msgs := makeMsgs(L)
-
-	// Sign and verify (opaque signature blob)
-	sig, err := BBSSign(msgs, sk)
+	// 1. Caller creates request
+	request, err := callerState.AKERequest()
 	if err != nil {
-		t.Fatalf("BBSSign: %v", err)
-	}
-	if len(sig) == 0 {
-		t.Fatalf("BBSSign: empty signature blob")
-	}
-	ok, err := BBSVerify(msgs, pk, sig)
-	if err != nil {
-		t.Fatalf("BBSVerify: %v", err)
-	}
-	if !ok {
-		t.Fatalf("BBSVerify: expected valid")
+		t.Fatalf("AKERequest: %v", err)
 	}
 
-	// Proof: reveal none (k=0)
-	nonce := s2b("bbs-proof-nonce")
-	proof0, err := BBSCreateProof(msgs, nil, pk, sig, nonce)
+	// 2. Recipient processes request and creates response
+	response, err := recipientState.AKEResponse(request)
 	if err != nil {
-		t.Fatalf("BBSCreateProof k=0: %v", err)
-	}
-	if len(proof0) == 0 {
-		t.Fatalf("proof blob empty")
-	}
-	ok, err = BBSVerifyProof(nil, nil, pk, nonce, proof0)
-	if err != nil {
-		t.Fatalf("BBSVerifyProof k=0: %v", err)
-	}
-	if !ok {
-		t.Fatalf("BBSVerifyProof k=0: expected valid")
+		t.Fatalf("AKEResponse: %v", err)
 	}
 
-	// Proof: reveal subset {1,3,6} (1-based)
-	disclose := []uint32{1, 3, 6}
-	proofS, err := BBSCreateProof(msgs, disclose, pk, sig, nonce)
+	// 3. Caller processes response and creates complete
+	complete, err := callerState.AKEComplete(response)
 	if err != nil {
-		t.Fatalf("BBSCreateProof subset: %v", err)
-	}
-	disclosedMsgs := [][]byte{msgs[0], msgs[2], msgs[5]}
-	ok, err = BBSVerifyProof(disclose, disclosedMsgs, pk, nonce, proofS)
-	if err != nil {
-		t.Fatalf("BBSVerifyProof subset: %v", err)
-	}
-	if !ok {
-		t.Fatalf("BBSVerifyProof subset: expected valid")
+		t.Fatalf("AKEComplete: %v", err)
 	}
 
-	// Negative: wrong nonce → invalid
-	ok, err = BBSVerifyProof(disclose, disclosedMsgs, pk, s2b("wrong"), proofS)
-	if err != nil {
-		t.Fatalf("BBSVerifyProof wrong nonce: %v", err)
-	}
-	if ok {
-		t.Fatalf("BBSVerifyProof should be invalid with wrong nonce")
+	// 4. Recipient finalizes
+	if err := recipientState.AKEFinalize(complete); err != nil {
+		t.Fatalf("AKEFinalize: %v", err)
 	}
 
-	// Negative: wrong pk → invalid
-	_, pk2, err := BBSKeygen()
+	// Verify shared keys match
+	callerKey, err := callerState.SharedKey()
 	if err != nil {
-		t.Fatalf("BBSKeygen2: %v", err)
+		t.Fatalf("SharedKey (caller): %v", err)
 	}
-	ok, err = BBSVerifyProof(disclose, disclosedMsgs, pk2, nonce, proofS)
+	recipientKey, err := recipientState.SharedKey()
 	if err != nil {
-		t.Fatalf("BBSVerifyProof wrong pk: %v", err)
-	}
-	if ok {
-		t.Fatalf("BBSVerifyProof should be invalid with wrong pk")
+		t.Fatalf("SharedKey (recipient): %v", err)
 	}
 
-	// Negative: tamper proof → invalid (either parse error OR parsed-invalid)
-	tam := append([]byte(nil), proofS...)
-	tam[len(tam)/3] ^= 0x01
-	if bytes.Equal(tam, proofS) {
-		t.Fatal("tamper failed (equal blobs)")
+	if !bytes.Equal(callerKey, recipientKey) {
+		t.Error("Shared keys do not match")
 	}
-	ok, err = BBSVerifyProof(disclose, disclosedMsgs, pk, nonce, tam)
-	if err == nil && ok {
-		t.Fatalf("BBSVerifyProof should fail on tampered proof")
+	if len(callerKey) == 0 {
+		t.Error("Shared key should not be empty")
+	}
+}
+
+// ============================================================================
+// RUA Protocol Tests
+// ============================================================================
+
+func TestRUA_AfterAKE(t *testing.T) {
+	// Setup with full AKE exchange first
+	callerCfg := createTestConfig(t, "+1111111111", "Alice")
+	defer callerCfg.Close()
+	recipientCfg := createTestConfig(t, "+2222222222", "Bob")
+	defer recipientCfg.Close()
+
+	callerState, _ := NewCallState(callerCfg, "+2222222222", true)
+	defer callerState.Close()
+	recipientState, _ := NewCallState(recipientCfg, "+1111111111", false)
+	defer recipientState.Close()
+
+	// Complete AKE
+	callerState.AKEInit()
+	recipientState.AKEInit()
+	request, _ := callerState.AKERequest()
+	response, _ := recipientState.AKEResponse(request)
+	complete, _ := callerState.AKEComplete(response)
+	recipientState.AKEFinalize(complete)
+
+	// Transition to RUA
+	if err := callerState.TransitionToRUA(); err != nil {
+		t.Fatalf("TransitionToRUA (caller): %v", err)
+	}
+	if err := recipientState.TransitionToRUA(); err != nil {
+		t.Fatalf("TransitionToRUA (recipient): %v", err)
+	}
+
+	// Initialize RUA
+	if err := callerState.RUAInit(); err != nil {
+		t.Fatalf("RUAInit (caller): %v", err)
+	}
+	if err := recipientState.RUAInit(); err != nil {
+		t.Fatalf("RUAInit (recipient): %v", err)
+	}
+
+	// RUA exchange
+	ruaRequest, err := callerState.RUARequest()
+	if err != nil {
+		t.Fatalf("RUARequest: %v", err)
+	}
+
+	ruaResponse, err := recipientState.RUAResponse(ruaRequest)
+	if err != nil {
+		t.Fatalf("RUAResponse: %v", err)
+	}
+
+	if err := callerState.RUAFinalize(ruaResponse); err != nil {
+		t.Fatalf("RUAFinalize: %v", err)
+	}
+
+	// Verify remote party info
+	callerRemote, err := callerState.RemoteParty()
+	if err != nil {
+		t.Fatalf("RemoteParty (caller): %v", err)
+	}
+	if !callerRemote.Verified {
+		t.Error("Remote party should be verified after RUA")
+	}
+
+	recipientRemote, err := recipientState.RemoteParty()
+	if err != nil {
+		t.Fatalf("RemoteParty (recipient): %v", err)
+	}
+	if !recipientRemote.Verified {
+		t.Error("Recipient's remote party should be verified after RUA")
+	}
+}
+
+// ============================================================================
+// DR Messaging Tests
+// ============================================================================
+
+func TestDR_EncryptDecrypt(t *testing.T) {
+	// Full setup: AKE + RUA
+	callerCfg := createTestConfig(t, "+1111111111", "Alice")
+	defer callerCfg.Close()
+	recipientCfg := createTestConfig(t, "+2222222222", "Bob")
+	defer recipientCfg.Close()
+
+	callerState, _ := NewCallState(callerCfg, "+2222222222", true)
+	defer callerState.Close()
+	recipientState, _ := NewCallState(recipientCfg, "+1111111111", false)
+	defer recipientState.Close()
+
+	// Complete AKE
+	callerState.AKEInit()
+	recipientState.AKEInit()
+	request, _ := callerState.AKERequest()
+	response, _ := recipientState.AKEResponse(request)
+	complete, _ := callerState.AKEComplete(response)
+	recipientState.AKEFinalize(complete)
+
+	// Complete RUA
+	callerState.TransitionToRUA()
+	recipientState.TransitionToRUA()
+	callerState.RUAInit()
+	recipientState.RUAInit()
+	ruaReq, _ := callerState.RUARequest()
+	ruaResp, _ := recipientState.RUAResponse(ruaReq)
+	callerState.RUAFinalize(ruaResp)
+
+	// Test encryption/decryption
+	plaintext := []byte("Hello, secure world!")
+
+	ciphertext, err := callerState.Encrypt(plaintext)
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+
+	decrypted, err := recipientState.Decrypt(ciphertext)
+	if err != nil {
+		t.Fatalf("Decrypt: %v", err)
+	}
+
+	if !bytes.Equal(plaintext, decrypted) {
+		t.Errorf("Decrypted message mismatch: got %q, want %q", decrypted, plaintext)
+	}
+}
+
+// ============================================================================
+// Message Tests
+// ============================================================================
+
+func TestMessage_ParseAndType(t *testing.T) {
+	cfg := createTestConfig(t, "+1111111111", "Test")
+	defer cfg.Close()
+
+	cs, _ := NewCallState(cfg, "+2222222222", true)
+	defer cs.Close()
+	cs.AKEInit()
+
+	// Create an AKE request
+	request, err := cs.AKERequest()
+	if err != nil {
+		t.Fatalf("AKERequest: %v", err)
+	}
+
+	// Parse it
+	msg, err := ParseMessage(request)
+	if err != nil {
+		t.Fatalf("ParseMessage: %v", err)
+	}
+	defer msg.Close()
+
+	if msg.Type() != MsgAKERequest {
+		t.Errorf("Message type = %d, want %d", msg.Type(), MsgAKERequest)
+	}
+
+	senderID, err := msg.SenderID()
+	if err != nil {
+		t.Fatalf("SenderID: %v", err)
+	}
+	if senderID == "" {
+		t.Error("SenderID should not be empty")
+	}
+}
+
+func TestMessage_ByeAndHeartbeat(t *testing.T) {
+	cfg := createTestConfig(t, "+1111111111", "Test")
+	defer cfg.Close()
+
+	cs, _ := NewCallState(cfg, "+2222222222", true)
+	defer cs.Close()
+	cs.AKEInit()
+
+	// Test Bye message
+	bye, err := cs.CreateByeMessage()
+	if err != nil {
+		t.Fatalf("CreateByeMessage: %v", err)
+	}
+	if len(bye) == 0 {
+		t.Error("Bye message should not be empty")
+	}
+
+	byeMsg, err := ParseMessage(bye)
+	if err != nil {
+		t.Fatalf("ParseMessage (bye): %v", err)
+	}
+	defer byeMsg.Close()
+	if byeMsg.Type() != MsgBye {
+		t.Errorf("Bye message type = %d, want %d", byeMsg.Type(), MsgBye)
+	}
+
+	// Test Heartbeat message
+	hb, err := cs.CreateHeartbeatMessage()
+	if err != nil {
+		t.Fatalf("CreateHeartbeatMessage: %v", err)
+	}
+	if len(hb) == 0 {
+		t.Error("Heartbeat message should not be empty")
+	}
+
+	hbMsg, err := ParseMessage(hb)
+	if err != nil {
+		t.Fatalf("ParseMessage (heartbeat): %v", err)
+	}
+	defer hbMsg.Close()
+	if hbMsg.Type() != MsgHeartbeat {
+		t.Errorf("Heartbeat message type = %d, want %d", hbMsg.Type(), MsgHeartbeat)
+	}
+}
+
+// ============================================================================
+// Enrollment Tests
+// ============================================================================
+
+func TestEnrollment_FullFlow(t *testing.T) {
+	// This test validates the full enrollment flow using the shared server config
+	phone := "+1555987654"
+	name := "Test Enrollment"
+	logo := "https://example.com/logo.png"
+
+	// Client creates request
+	keys, request, err := CreateEnrollmentRequest(phone, name, logo, 3)
+	if err != nil {
+		t.Fatalf("CreateEnrollmentRequest: %v", err)
+	}
+	defer keys.Close()
+
+	if len(request) == 0 {
+		t.Error("Request should not be empty")
+	}
+
+	// Server processes (using shared test server config)
+	response, err := testServerConfig.ProcessEnrollment(request)
+	if err != nil {
+		t.Fatalf("ProcessEnrollment: %v", err)
+	}
+	if len(response) == 0 {
+		t.Error("Response should not be empty")
+	}
+
+	// Client finalizes
+	cfg, err := FinalizeEnrollment(keys, response, phone, name, logo)
+	if err != nil {
+		t.Fatalf("FinalizeEnrollment: %v", err)
+	}
+	defer cfg.Close()
+
+	// Verify config is usable
+	envStr, err := cfg.ToEnv()
+	if err != nil {
+		t.Fatalf("ToEnv: %v", err)
+	}
+
+	if !strings.Contains(envStr, phone) {
+		t.Error("Config should contain phone number")
+	}
+}
+
+// ============================================================================
+// Error Handling Tests
+// ============================================================================
+
+func TestErrors_NilHandles(t *testing.T) {
+	var cfg *Config
+	_, err := cfg.ToEnv()
+	if err != ErrInvalidArg {
+		t.Errorf("Expected ErrInvalidArg, got %v", err)
+	}
+
+	var cs *CallState
+	_, err = cs.AKERequest()
+	if err != ErrInvalidArg {
+		t.Errorf("Expected ErrInvalidArg, got %v", err)
+	}
+}
+
+func TestErrors_InvalidInput(t *testing.T) {
+	cfg := createTestConfig(t, "+1111111111", "Test")
+	defer cfg.Close()
+
+	cs, _ := NewCallState(cfg, "+2222222222", true)
+	defer cs.Close()
+	cs.AKEInit()
+
+	// Empty input
+	_, err := cs.AKEResponse(nil)
+	if err != ErrInvalidArg {
+		t.Errorf("Expected ErrInvalidArg for nil input, got %v", err)
+	}
+
+	_, err = cs.AKEResponse([]byte{})
+	if err != ErrInvalidArg {
+		t.Errorf("Expected ErrInvalidArg for empty input, got %v", err)
 	}
 }

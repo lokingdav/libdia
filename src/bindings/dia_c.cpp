@@ -5,6 +5,9 @@
 #include "../protocol/rua.hpp"
 #include "../protocol/enrollment.hpp"
 #include "../crypto/ecgroup.hpp"
+#include "../crypto/bbs.hpp"
+#include "../crypto/voprf.hpp"
+#include "../crypto/amf.hpp"
 #include "../helpers.hpp"
 
 #include <cstring>
@@ -648,6 +651,82 @@ int dia_enrollment_process(const dia_server_config_t* server_config,
         Bytes resp_bytes = response.serialize();
         copy_to_c_bytes(resp_bytes, out_response, out_response_len);
         
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR;
+    }
+}
+
+/*==============================================================================
+ * Key Generation API
+ *============================================================================*/
+
+int dia_server_config_generate(int duration_days, dia_server_config_t** out_config) {
+    if (!out_config) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        ServerConfig config;
+        
+        // Generate BBS keypair for Credential Issuance
+        bbs::Params bbs_params = bbs::Params::Default();
+        bbs::KeyPair ci_keypair = bbs::keygen(bbs_params);
+        config.ci_private_key = ci_keypair.sk.to_bytes();
+        config.ci_public_key = ci_keypair.pk.to_bytes();
+        
+        // Generate VOPRF keypair for Access Throttling
+        voprf::KeyPair at_keypair = voprf::keygen();
+        config.at_private_key = at_keypair.sk.to_bytes();
+        config.at_public_key = at_keypair.pk.to_bytes();
+        
+        // Generate AMF keypair for Moderator
+        amf::Params amf_params = amf::Params::Default();
+        amf::KeyPair mod_keypair = amf::KeyGen(amf_params);
+        config.amf_public_key = mod_keypair.pk.to_bytes();
+        
+        config.enrollment_duration_days = duration_days > 0 ? duration_days : 30;
+        
+        auto* cfg = new dia_server_config_t{std::move(config)};
+        *out_config = cfg;
+        
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR;
+    }
+}
+
+int dia_server_config_get_ci_public_key(const dia_server_config_t* config,
+                                        unsigned char** key_out,
+                                        size_t* key_len) {
+    if (!config || !key_out || !key_len) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        copy_to_c_bytes(config->config.ci_public_key, key_out, key_len);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR;
+    }
+}
+
+int dia_server_config_get_at_public_key(const dia_server_config_t* config,
+                                        unsigned char** key_out,
+                                        size_t* key_len) {
+    if (!config || !key_out || !key_len) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        copy_to_c_bytes(config->config.at_public_key, key_out, key_len);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR;
+    }
+}
+
+int dia_server_config_get_amf_public_key(const dia_server_config_t* config,
+                                         unsigned char** key_out,
+                                         size_t* key_len) {
+    if (!config || !key_out || !key_len) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        copy_to_c_bytes(config->config.amf_public_key, key_out, key_len);
         return DIA_OK;
     } catch (...) {
         return DIA_ERR;

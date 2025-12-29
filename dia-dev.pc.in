@@ -1,0 +1,12 @@
+# Development pkg-config file - points to build directory
+# Use: PKG_CONFIG_PATH=@CMAKE_BINARY_DIR@ pkg-config --cflags --libs dia-dev
+
+prefix=@CMAKE_SOURCE_DIR@
+builddir=@CMAKE_BINARY_DIR@
+includedir=${prefix}/include
+
+Name: dia-dev
+Description: DIA protocol library (development build)
+Version: @PROJECT_VERSION@
+Libs: -L${builddir}/src -L${builddir}/lib -ldia_c_interface -ldia -lecgroup -lmcl @SODIUM_PKG_LIBS@ -lstdc++ -lpthread -ldl
+Cflags: -I${includedir} @SODIUM_PKG_CFLAGS@
