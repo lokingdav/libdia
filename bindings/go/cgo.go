@@ -13,7 +13,7 @@
 package dia
 
 /*
-#cgo pkg-config: dia-dev
+#cgo pkg-config: dia
 #include <dia/dia_c.h>
 #include <stdlib.h>
 */

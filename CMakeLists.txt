@@ -10,7 +10,7 @@ set(MCL_BUILD_STATIC     ON  CACHE BOOL "" FORCE)
 # Project Definition
 # -----------------------------------------------------------------------------
 # Define the project name, version, and language
-project(dia VERSION 1.0.0 LANGUAGES C CXX)
+project(dia VERSION 2.0.3 LANGUAGES C CXX)
 
 # -----------------------------------------------------------------------------
 # C++ Standard Configuration
