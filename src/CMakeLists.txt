@@ -45,7 +45,9 @@ target_include_directories(dia
     ${SODIUM_INCLUDE_DIRS}
 )
 
-target_link_libraries(dia PUBLIC ecgroup ${SODIUM_LIBRARIES})
+# Link libsodium privately (will be included when linking final binaries)
+# For static builds, users need to link against libsodium themselves
+target_link_libraries(dia PUBLIC ecgroup PRIVATE ${SODIUM_LIBRARIES})
 
 
 # -----------------------------------------------------------------------------

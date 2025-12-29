@@ -6,6 +6,5 @@ includedir=${prefix}/include
 Name: dia
 Description: Dynamic Identity Authentication protocol Implementation in C++ with C interface
 Version: @PROJECT_VERSION@
-Requires.private: libsodium
-Libs: -L${libdir} -ldia_c_interface -ldia -lecgroup -lmcl -lstdc++
-Cflags: -I${includedir}
+Libs: -L${libdir} -ldia_c_interface -ldia -lecgroup -lmcl @SODIUM_PKG_LIBS@ -lstdc++
+Cflags: -I${includedir} @SODIUM_PKG_CFLAGS@

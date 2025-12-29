@@ -93,6 +93,12 @@ if(NOT FORCE_BUNDLED_SODIUM)
           OUTPUT_STRIP_TRAILING_WHITESPACE
         )
       endif()
+      # Use static library for embedding
+      find_library(SODIUM_STATIC_LIB libsodium.a HINTS ${SODIUM_LIBDIR} ${SODIUM_LIBRARY_DIRS})
+      if(SODIUM_STATIC_LIB)
+        set(SODIUM_LIBRARIES ${SODIUM_STATIC_LIB})
+        message(STATUS "  Using static libsodium: ${SODIUM_LIBRARIES}")
+      endif()
     endif()
   endif()
 endif()
@@ -251,22 +257,17 @@ set(SODIUM_LIBRARIES ${SODIUM_LIBRARIES} CACHE INTERNAL "libsodium libraries")
 
 # Set pkg-config variables for sodium
 if(SODIUM_FOUND_SYSTEM)
-  # Include library directory for static linking
-  if(SODIUM_LIBDIR)
-    set(SODIUM_PKG_LIBS "-L${SODIUM_LIBDIR} -lsodium")
-  else()
-    set(SODIUM_PKG_LIBS "-lsodium")
-  endif()
+  # System libsodium - just reference it
+  set(SODIUM_PKG_LIBS "-lsodium")
   if(SODIUM_INCLUDE_DIRS)
     set(SODIUM_PKG_CFLAGS "-I${SODIUM_INCLUDE_DIRS}")
   else()
     set(SODIUM_PKG_CFLAGS "")
   endif()
 else()
-  # For bundled sodium, use full path to the static library
-  get_filename_component(SODIUM_PKG_LIBDIR "${SODIUM_LIBRARIES}" DIRECTORY)
-  set(SODIUM_PKG_LIBS "-L${SODIUM_PKG_LIBDIR} -lsodium")
-  set(SODIUM_PKG_CFLAGS "-I${SODIUM_INCLUDE_DIRS}")
+  # Bundled sodium will be installed alongside libdia
+  set(SODIUM_PKG_LIBS "-lsodium")
+  set(SODIUM_PKG_CFLAGS "")
 endif()
 
 message(STATUS "SODIUM_PKG_LIBS: [${SODIUM_PKG_LIBS}]")
@@ -297,6 +298,19 @@ install(TARGETS
   LIBRARY  DESTINATION lib
   RUNTIME  DESTINATION bin
 )
+
+# Install bundled libsodium if it was built from source
+if(NOT SODIUM_FOUND_SYSTEM AND SODIUM_LIBRARIES)
+  get_filename_component(SODIUM_LIB_FILE "${SODIUM_LIBRARIES}" NAME)
+  install(FILES "${SODIUM_LIBRARIES}"
+          DESTINATION lib)
+  # Also install headers if available
+  if(SODIUM_INCLUDE_DIRS)
+    install(DIRECTORY "${SODIUM_INCLUDE_DIRS}/"
+            DESTINATION include
+            FILES_MATCHING PATTERN "*.h")
+  endif()
+endif()
 
  # Install the public header files.
  install(DIRECTORY include/
