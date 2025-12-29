@@ -732,3 +732,28 @@ int dia_server_config_get_amf_public_key(const dia_server_config_t* config,
         return DIA_ERR;
     }
 }
+
+int dia_server_config_from_env_string(const char* env_content, dia_server_config_t** out) {
+    if (!env_content || !out) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        auto* cfg = new dia_server_config_t();
+        cfg->config = ServerConfig::from_env_string(std::string(env_content));
+        *out = cfg;
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR;
+    }
+}
+
+int dia_server_config_to_env_string(const dia_server_config_t* cfg, char** out) {
+    if (!cfg || !out) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        std::string env = cfg->config.to_env_string();
+        *out = copy_to_c_string(env);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR;
+    }
+}

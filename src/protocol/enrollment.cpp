@@ -449,4 +449,77 @@ EnrollmentResponse process_enrollment(
     return response;
 }
 
+// -----------------------------------------------------------------------------
+// ServerConfig serialization
+// -----------------------------------------------------------------------------
+
+std::string ServerConfig::to_env_string() const {
+    using dia::utils::bytes_to_hex;
+    
+    std::ostringstream oss;
+    
+    // Credential Issuance keys
+    oss << "CI_SK=" << bytes_to_hex(ci_private_key) << "\n";
+    oss << "CI_PK=" << bytes_to_hex(ci_public_key) << "\n";
+    
+    // Access Throttling keys
+    oss << "AT_SK=" << bytes_to_hex(at_private_key) << "\n";
+    oss << "AT_VK=" << bytes_to_hex(at_public_key) << "\n";
+    
+    // AMF Moderator public key
+    oss << "AMF_PK=" << bytes_to_hex(amf_public_key) << "\n";
+    
+    // Enrollment duration
+    oss << "ENROLLMENT_DURATION_DAYS=" << enrollment_duration_days << "\n";
+    
+    return oss.str();
+}
+
+ServerConfig ServerConfig::from_env_string(const std::string& env_content) {
+    using dia::utils::hex_to_bytes;
+    
+    ServerConfig config;
+    std::istringstream iss(env_content);
+    std::string line;
+    
+    while (std::getline(iss, line)) {
+        // Skip empty lines and comments
+        if (line.empty() || line[0] == '#') {
+            continue;
+        }
+        
+        // Find the '=' separator
+        auto eq_pos = line.find('=');
+        if (eq_pos == std::string::npos) {
+            continue;
+        }
+        
+        std::string key = line.substr(0, eq_pos);
+        std::string value = line.substr(eq_pos + 1);
+        
+        // Remove trailing whitespace/newline
+        while (!value.empty() && (value.back() == '\r' || value.back() == '\n' || value.back() == ' ')) {
+            value.pop_back();
+        }
+        
+        // Parse based on key
+        if (key == "CI_SK") {
+            config.ci_private_key = hex_to_bytes(value);
+        } else if (key == "CI_PK") {
+            config.ci_public_key = hex_to_bytes(value);
+        } else if (key == "AT_SK") {
+            config.at_private_key = hex_to_bytes(value);
+        } else if (key == "AT_VK") {
+            config.at_public_key = hex_to_bytes(value);
+        } else if (key == "AMF_PK") {
+            config.amf_public_key = hex_to_bytes(value);
+        } else if (key == "ENROLLMENT_DURATION_DAYS") {
+            config.enrollment_duration_days = std::stoi(value);
+        }
+        // Unknown keys are silently ignored
+    }
+    
+    return config;
+}
+
 } // namespace protocol

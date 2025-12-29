@@ -425,6 +425,19 @@ int dia_server_config_get_amf_public_key(const dia_server_config_t* config,
                                          unsigned char** key_out,
                                          size_t* key_len);
 
+/**
+ * Parse a ServerConfig from environment variable format string.
+ * Format: KEY=value lines (byte values are hex-encoded).
+ * Returns DIA_OK on success, writes to *out.
+ */
+int dia_server_config_from_env_string(const char* env_content, dia_server_config_t** out);
+
+/**
+ * Serialize a ServerConfig to environment variable format string.
+ * Caller must free returned string with dia_free_string().
+ */
+int dia_server_config_to_env_string(const dia_server_config_t* cfg, char** out);
+
 #ifdef __cplusplus
 }
 #endif

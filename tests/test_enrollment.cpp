@@ -328,3 +328,97 @@ TEST_CASE("Finalized ticket can be verified", "[enrollment]") {
     
     REQUIRE(voprf::verify(input_str, output, vk));
 }
+
+TEST_CASE("ServerConfig env string serialization round trip", "[enrollment]") {
+    init_crypto();
+    
+    // Create a server config with generated keys
+    ServerConfig original = create_test_server_config();
+    original.enrollment_duration_days = 45; // Custom duration
+    
+    // Serialize to env string
+    std::string env_str = original.to_env_string();
+    
+    REQUIRE(!env_str.empty());
+    REQUIRE(env_str.find("CI_SK=") != std::string::npos);
+    REQUIRE(env_str.find("CI_PK=") != std::string::npos);
+    REQUIRE(env_str.find("AT_SK=") != std::string::npos);
+    REQUIRE(env_str.find("AT_VK=") != std::string::npos);
+    REQUIRE(env_str.find("AMF_PK=") != std::string::npos);
+    REQUIRE(env_str.find("ENROLLMENT_DURATION_DAYS=45") != std::string::npos);
+    
+    // Deserialize from env string
+    ServerConfig restored = ServerConfig::from_env_string(env_str);
+    
+    // Verify all fields match
+    REQUIRE(restored.ci_private_key == original.ci_private_key);
+    REQUIRE(restored.ci_public_key == original.ci_public_key);
+    REQUIRE(restored.at_private_key == original.at_private_key);
+    REQUIRE(restored.at_public_key == original.at_public_key);
+    REQUIRE(restored.amf_public_key == original.amf_public_key);
+    REQUIRE(restored.enrollment_duration_days == original.enrollment_duration_days);
+}
+
+TEST_CASE("ServerConfig from_env_string handles comments and whitespace", "[enrollment]") {
+    init_crypto();
+    
+    std::string env_with_comments = R"(
+# Server Configuration
+# Generated on 2025-12-29
+
+CI_SK=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+CI_PK=fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
+
+# Access Throttling Keys
+AT_SK=1111111111111111111111111111111111111111111111111111111111111111
+AT_VK=2222222222222222222222222222222222222222222222222222222222222222
+
+# AMF Moderator
+AMF_PK=3333333333333333333333333333333333333333333333333333333333333333
+
+ENROLLMENT_DURATION_DAYS=30
+)";
+    
+    ServerConfig config = ServerConfig::from_env_string(env_with_comments);
+    
+    // Verify fields were parsed correctly
+    REQUIRE(config.ci_private_key.size() == 32);
+    REQUIRE(config.ci_public_key.size() == 32);
+    REQUIRE(config.at_private_key.size() == 32);
+    REQUIRE(config.at_public_key.size() == 32);
+    REQUIRE(config.amf_public_key.size() == 32);
+    REQUIRE(config.enrollment_duration_days == 30);
+}
+
+TEST_CASE("ServerConfig can process enrollment after serialization round trip", "[enrollment]") {
+    init_crypto();
+    
+    // Create original server config
+    ServerConfig original = create_test_server_config();
+    
+    // Serialize and deserialize
+    std::string env_str = original.to_env_string();
+    ServerConfig restored = ServerConfig::from_env_string(env_str);
+    
+    // Create enrollment request
+    auto [keys, request] = create_enrollment_request(
+        "+1234567890",
+        "Bob",
+        "https://example.com/avatar.png",
+        1
+    );
+    
+    // Process with both configs - should produce same result
+    EnrollmentResponse response1 = process_enrollment(original, request);
+    EnrollmentResponse response2 = process_enrollment(restored, request);
+    
+    // Both should succeed
+    REQUIRE(!response1.enrollment_id.empty());
+    REQUIRE(!response2.enrollment_id.empty());
+    
+    // Public keys should match
+    REQUIRE(response1.ra_public_key == response2.ra_public_key);
+    REQUIRE(response1.amf_moderator_pk == response2.amf_moderator_pk);
+    REQUIRE(response1.ticket_verify_key == response2.ticket_verify_key);
+}
+

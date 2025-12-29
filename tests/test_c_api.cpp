@@ -356,3 +356,68 @@ TEST_CASE("Enrollment API full flow", "[c_api][enrollment]") {
     dia_config_destroy(client_cfg);
     dia_server_config_destroy(server_cfg);
 }
+
+TEST_CASE("ServerConfig env string serialization", "[c_api][enrollment]") {
+    dia_init();
+    
+    // Generate a server config
+    dia_server_config_t* original_cfg = nullptr;
+    int result = dia_server_config_generate(45, &original_cfg);
+    REQUIRE(result == DIA_OK);
+    REQUIRE(original_cfg != nullptr);
+    
+    // Serialize to env string
+    char* env_str = nullptr;
+    result = dia_server_config_to_env_string(original_cfg, &env_str);
+    REQUIRE(result == DIA_OK);
+    REQUIRE(env_str != nullptr);
+    
+    std::string env(env_str);
+    REQUIRE(env.find("CI_SK=") != std::string::npos);
+    REQUIRE(env.find("CI_PK=") != std::string::npos);
+    REQUIRE(env.find("AT_SK=") != std::string::npos);
+    REQUIRE(env.find("AT_VK=") != std::string::npos);
+    REQUIRE(env.find("AMF_PK=") != std::string::npos);
+    REQUIRE(env.find("ENROLLMENT_DURATION_DAYS=45") != std::string::npos);
+    
+    // Deserialize back
+    dia_server_config_t* restored_cfg = nullptr;
+    result = dia_server_config_from_env_string(env_str, &restored_cfg);
+    REQUIRE(result == DIA_OK);
+    REQUIRE(restored_cfg != nullptr);
+    
+    // Verify round trip by getting keys
+    unsigned char* orig_ci_pk = nullptr;
+    unsigned char* rest_ci_pk = nullptr;
+    size_t orig_len = 0, rest_len = 0;
+    
+    REQUIRE(dia_server_config_get_ci_public_key(original_cfg, &orig_ci_pk, &orig_len) == DIA_OK);
+    REQUIRE(dia_server_config_get_ci_public_key(restored_cfg, &rest_ci_pk, &rest_len) == DIA_OK);
+    REQUIRE(orig_len == rest_len);
+    REQUIRE(std::memcmp(orig_ci_pk, rest_ci_pk, orig_len) == 0);
+    
+    unsigned char* orig_at_pk = nullptr;
+    unsigned char* rest_at_pk = nullptr;
+    REQUIRE(dia_server_config_get_at_public_key(original_cfg, &orig_at_pk, &orig_len) == DIA_OK);
+    REQUIRE(dia_server_config_get_at_public_key(restored_cfg, &rest_at_pk, &rest_len) == DIA_OK);
+    REQUIRE(orig_len == rest_len);
+    REQUIRE(std::memcmp(orig_at_pk, rest_at_pk, orig_len) == 0);
+    
+    unsigned char* orig_amf_pk = nullptr;
+    unsigned char* rest_amf_pk = nullptr;
+    REQUIRE(dia_server_config_get_amf_public_key(original_cfg, &orig_amf_pk, &orig_len) == DIA_OK);
+    REQUIRE(dia_server_config_get_amf_public_key(restored_cfg, &rest_amf_pk, &rest_len) == DIA_OK);
+    REQUIRE(orig_len == rest_len);
+    REQUIRE(std::memcmp(orig_amf_pk, rest_amf_pk, orig_len) == 0);
+    
+    // Clean up
+    dia_free_bytes(orig_ci_pk);
+    dia_free_bytes(rest_ci_pk);
+    dia_free_bytes(orig_at_pk);
+    dia_free_bytes(rest_at_pk);
+    dia_free_bytes(orig_amf_pk);
+    dia_free_bytes(rest_amf_pk);
+    dia_free_string(env_str);
+    dia_server_config_destroy(original_cfg);
+    dia_server_config_destroy(restored_cfg);
+}

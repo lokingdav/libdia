@@ -588,6 +588,148 @@ func TestEnrollment_FullFlow(t *testing.T) {
 	}
 }
 
+func TestServerConfig_ToEnv(t *testing.T) {
+	// Generate a server config
+	cfg, err := GenerateServerConfig(45)
+	if err != nil {
+		t.Fatalf("GenerateServerConfig: %v", err)
+	}
+	defer cfg.Close()
+
+	// Serialize to env string
+	envStr, err := cfg.ToEnv()
+	if err != nil {
+		t.Fatalf("ToEnv: %v", err)
+	}
+
+	if envStr == "" {
+		t.Error("Env string should not be empty")
+	}
+
+	// Check for expected keys
+	if !strings.Contains(envStr, "CI_SK=") {
+		t.Error("Env should contain CI_SK")
+	}
+	if !strings.Contains(envStr, "CI_PK=") {
+		t.Error("Env should contain CI_PK")
+	}
+	if !strings.Contains(envStr, "AT_SK=") {
+		t.Error("Env should contain AT_SK")
+	}
+	if !strings.Contains(envStr, "AT_VK=") {
+		t.Error("Env should contain AT_VK")
+	}
+	if !strings.Contains(envStr, "AMF_PK=") {
+		t.Error("Env should contain AMF_PK")
+	}
+	if !strings.Contains(envStr, "ENROLLMENT_DURATION_DAYS=45") {
+		t.Error("Env should contain ENROLLMENT_DURATION_DAYS=45")
+	}
+}
+
+func TestServerConfig_RoundTrip(t *testing.T) {
+	// Generate original config
+	original, err := GenerateServerConfig(60)
+	if err != nil {
+		t.Fatalf("GenerateServerConfig: %v", err)
+	}
+	defer original.Close()
+
+	// Serialize
+	envStr, err := original.ToEnv()
+	if err != nil {
+		t.Fatalf("ToEnv: %v", err)
+	}
+
+	// Deserialize
+	restored, err := ServerConfigFromEnv(envStr)
+	if err != nil {
+		t.Fatalf("ServerConfigFromEnv: %v", err)
+	}
+	defer restored.Close()
+
+	// Test functional equivalence by processing same enrollment request
+	phone := "+1234567890"
+	name := "Alice"
+	logo := "https://example.com/logo.png"
+
+	keys, request, err := CreateEnrollmentRequest(phone, name, logo, 1)
+	if err != nil {
+		t.Fatalf("CreateEnrollmentRequest: %v", err)
+	}
+	defer keys.Close()
+
+	// Process with original
+	resp1, err := original.ProcessEnrollment(request)
+	if err != nil {
+		t.Fatalf("ProcessEnrollment with original: %v", err)
+	}
+
+	// Responses should be valid (both should work for finalization)
+	cfg1, err := FinalizeEnrollment(keys, resp1, phone, name, logo)
+	if err != nil {
+		t.Fatalf("FinalizeEnrollment with resp1: %v", err)
+	}
+	cfg1.Close()
+
+	// Create new keys for second finalization with restored config
+	keys2, request2, err := CreateEnrollmentRequest(phone, name, logo, 1)
+	if err != nil {
+		t.Fatalf("CreateEnrollmentRequest: %v", err)
+	}
+	defer keys2.Close()
+
+	resp2, err := restored.ProcessEnrollment(request2)
+	if err != nil {
+		t.Fatalf("ProcessEnrollment with restored: %v", err)
+	}
+
+	cfg2, err := FinalizeEnrollment(keys2, resp2, phone, name, logo)
+	if err != nil {
+		t.Fatalf("FinalizeEnrollment with resp2: %v", err)
+	}
+	cfg2.Close()
+}
+
+func TestServerConfig_FromEnvWithComments(t *testing.T) {
+	// Generate a config and get its env representation
+	original, err := GenerateServerConfig(30)
+	if err != nil {
+		t.Fatalf("GenerateServerConfig: %v", err)
+	}
+	defer original.Close()
+
+	envStr, err := original.ToEnv()
+	if err != nil {
+		t.Fatalf("ToEnv: %v", err)
+	}
+
+	// Add comments and whitespace to the env string
+	envWithComments := "# Server configuration\n" + envStr + "\n# End of config\n"
+	
+	cfg, err := ServerConfigFromEnv(envWithComments)
+	if err != nil {
+		t.Fatalf("ServerConfigFromEnv: %v", err)
+	}
+	defer cfg.Close()
+
+	// Should be able to process enrollment
+	keys, request, err := CreateEnrollmentRequest("+1234567890", "Test", "https://test.com", 1)
+	if err != nil {
+		t.Fatalf("CreateEnrollmentRequest: %v", err)
+	}
+	defer keys.Close()
+
+	response, err := cfg.ProcessEnrollment(request)
+	if err != nil {
+		t.Fatalf("ProcessEnrollment: %v", err)
+	}
+
+	if len(response) == 0 {
+		t.Error("Response should not be empty")
+	}
+}
+
 // ============================================================================
 // Error Handling Tests
 // ============================================================================

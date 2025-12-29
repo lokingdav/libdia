@@ -729,3 +729,42 @@ func (sc *ServerConfig) ProcessEnrollment(request []byte) ([]byte, error) {
 	defer C.dia_free_bytes(responseData)
 	return C.GoBytes(unsafe.Pointer(responseData), C.int(responseLen)), nil
 }
+
+// ToEnv serializes the ServerConfig to environment variable format (KEY=value lines).
+// Binary values are hex-encoded. This format is suitable for secure storage.
+func (sc *ServerConfig) ToEnv() (string, error) {
+	if sc == nil || sc.handle == nil {
+		return "", ErrInvalidArg
+	}
+
+	var envStr *C.char
+	rc := C.dia_server_config_to_env_string(sc.handle, &envStr)
+	if err := rcErr(rc); err != nil {
+		return "", err
+	}
+	defer C.dia_free_string(envStr)
+	return C.GoString(envStr), nil
+}
+
+// ServerConfigFromEnv parses a ServerConfig from environment variable format string.
+// Expects KEY=value lines with hex-encoded binary values. Comments (lines starting with #)
+// and blank lines are ignored.
+func ServerConfigFromEnv(envContent string) (*ServerConfig, error) {
+	ensureInit()
+
+	if len(envContent) == 0 {
+		return nil, ErrInvalidArg
+	}
+
+	cEnv := C.CString(envContent)
+	defer C.free(unsafe.Pointer(cEnv))
+
+	var handle *C.dia_server_config_t
+	rc := C.dia_server_config_from_env_string(cEnv, &handle)
+	if err := rcErr(rc); err != nil {
+		return nil, err
+	}
+	sc := &ServerConfig{handle: handle}
+	runtime.SetFinalizer(sc, (*ServerConfig).Close)
+	return sc, nil
+}

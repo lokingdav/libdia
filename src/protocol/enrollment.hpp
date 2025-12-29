@@ -122,6 +122,12 @@ struct ServerConfig {
     
     // Enrollment duration in days
     int enrollment_duration_days = 30;
+    
+    // Serialize to environment variable format
+    std::string to_env_string() const;
+    
+    // Deserialize from environment variable format
+    static ServerConfig from_env_string(const std::string& env_content);
 };
 
 // -----------------------------------------------------------------------------
