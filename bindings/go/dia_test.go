@@ -178,6 +178,22 @@ func TestAKE_FullExchange(t *testing.T) {
 		t.Fatalf("AKEInit (recipient): %v", err)
 	}
 
+	// Verify both parties derive the same AKE topic
+	callerTopic, err := callerState.AKETopic()
+	if err != nil {
+		t.Fatalf("AKETopic (caller): %v", err)
+	}
+	recipientTopic, err := recipientState.AKETopic()
+	if err != nil {
+		t.Fatalf("AKETopic (recipient): %v", err)
+	}
+	if callerTopic != recipientTopic {
+		t.Errorf("AKE topics don't match: caller=%s, recipient=%s", callerTopic, recipientTopic)
+	}
+	if len(callerTopic) == 0 {
+		t.Error("AKE topic should not be empty")
+	}
+
 	// 1. Caller creates request
 	request, err := callerState.AKERequest()
 	if err != nil {
@@ -212,10 +228,47 @@ func TestAKE_FullExchange(t *testing.T) {
 	}
 
 	if !bytes.Equal(callerKey, recipientKey) {
-		t.Error("Shared keys do not match")
+		t.Errorf("Shared keys do not match: caller len=%d, recipient len=%d", len(callerKey), len(recipientKey))
 	}
 	if len(callerKey) == 0 {
 		t.Error("Shared key should not be empty")
+	}
+	if len(callerKey) != 32 {
+		t.Errorf("Shared key length = %d, want 32", len(callerKey))
+	}
+
+	// Verify tickets are present
+	callerTicket, err := callerState.Ticket()
+	if err != nil {
+		t.Fatalf("Ticket (caller): %v", err)
+	}
+	if len(callerTicket) == 0 {
+		t.Error("Caller ticket should not be empty")
+	}
+
+	recipientTicket, err := recipientState.Ticket()
+	if err != nil {
+		t.Fatalf("Ticket (recipient): %v", err)
+	}
+	if len(recipientTicket) == 0 {
+		t.Error("Recipient ticket should not be empty")
+	}
+
+	// Verify sender IDs are set
+	callerSenderID, err := callerState.SenderID()
+	if err != nil {
+		t.Fatalf("SenderID (caller): %v", err)
+	}
+	if callerSenderID == "" {
+		t.Error("Caller sender ID should not be empty")
+	}
+
+	recipientSenderID, err := recipientState.SenderID()
+	if err != nil {
+		t.Fatalf("SenderID (recipient): %v", err)
+	}
+	if recipientSenderID == "" {
+		t.Error("Recipient sender ID should not be empty")
 	}
 }
 
@@ -282,6 +335,12 @@ func TestRUA_AfterAKE(t *testing.T) {
 	if !callerRemote.Verified {
 		t.Error("Remote party should be verified after RUA")
 	}
+	if callerRemote.Phone != "+2222222222" {
+		t.Errorf("Caller's remote phone = %q, want %q", callerRemote.Phone, "+2222222222")
+	}
+	if callerRemote.Name != "Bob" {
+		t.Errorf("Caller's remote name = %q, want %q", callerRemote.Name, "Bob")
+	}
 
 	recipientRemote, err := recipientState.RemoteParty()
 	if err != nil {
@@ -289,6 +348,12 @@ func TestRUA_AfterAKE(t *testing.T) {
 	}
 	if !recipientRemote.Verified {
 		t.Error("Recipient's remote party should be verified after RUA")
+	}
+	if recipientRemote.Phone != "+1111111111" {
+		t.Errorf("Recipient's remote phone = %q, want %q", recipientRemote.Phone, "+1111111111")
+	}
+	if recipientRemote.Name != "Alice" {
+		t.Errorf("Recipient's remote name = %q, want %q", recipientRemote.Name, "Alice")
 	}
 }
 
@@ -325,21 +390,54 @@ func TestDR_EncryptDecrypt(t *testing.T) {
 	ruaResp, _ := recipientState.RUAResponse(ruaReq)
 	callerState.RUAFinalize(ruaResp)
 
-	// Test encryption/decryption
-	plaintext := []byte("Hello, secure world!")
+	// Test encryption/decryption (caller -> recipient)
+	plaintext1 := []byte("Hello, secure world!")
 
-	ciphertext, err := callerState.Encrypt(plaintext)
+	ciphertext1, err := callerState.Encrypt(plaintext1)
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
 	}
 
-	decrypted, err := recipientState.Decrypt(ciphertext)
+	decrypted1, err := recipientState.Decrypt(ciphertext1)
 	if err != nil {
 		t.Fatalf("Decrypt: %v", err)
 	}
 
-	if !bytes.Equal(plaintext, decrypted) {
-		t.Errorf("Decrypted message mismatch: got %q, want %q", decrypted, plaintext)
+	if !bytes.Equal(plaintext1, decrypted1) {
+		t.Errorf("Decrypted message mismatch: got %q, want %q", decrypted1, plaintext1)
+	}
+
+	// Test bidirectional (recipient -> caller)
+	plaintext2 := []byte("Response from recipient")
+
+	ciphertext2, err := recipientState.Encrypt(plaintext2)
+	if err != nil {
+		t.Fatalf("Encrypt (recipient): %v", err)
+	}
+
+	decrypted2, err := callerState.Decrypt(ciphertext2)
+	if err != nil {
+		t.Fatalf("Decrypt (caller): %v", err)
+	}
+
+	if !bytes.Equal(plaintext2, decrypted2) {
+		t.Errorf("Bidirectional decrypted message mismatch: got %q, want %q", decrypted2, plaintext2)
+	}
+
+	// Test multiple messages in sequence
+	for i := 0; i < 5; i++ {
+		msg := []byte(strings.Repeat("test", i+1))
+		ct, err := callerState.Encrypt(msg)
+		if err != nil {
+			t.Fatalf("Encrypt message %d: %v", i, err)
+		}
+		pt, err := recipientState.Decrypt(ct)
+		if err != nil {
+			t.Fatalf("Decrypt message %d: %v", i, err)
+		}
+		if !bytes.Equal(msg, pt) {
+			t.Errorf("Message %d mismatch", i)
+		}
 	}
 }
 
@@ -378,6 +476,22 @@ func TestMessage_ParseAndType(t *testing.T) {
 	}
 	if senderID == "" {
 		t.Error("SenderID should not be empty")
+	}
+
+	// Verify we can parse the original request bytes again
+	msg2, err := ParseMessage(request)
+	if err != nil {
+		t.Fatalf("ParseMessage (second parse): %v", err)
+	}
+	defer msg2.Close()
+
+	if msg.Type() != msg2.Type() {
+		t.Errorf("Message type mismatch on re-parse: %d vs %d", msg.Type(), msg2.Type())
+	}
+
+	senderID2, _ := msg2.SenderID()
+	if senderID != senderID2 {
+		t.Errorf("Sender ID mismatch on re-parse: %s vs %s", senderID, senderID2)
 	}
 }
 
