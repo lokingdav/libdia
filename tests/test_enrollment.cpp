@@ -16,6 +16,7 @@ static ServerConfig create_test_server_config() {
     config.ci_public_key = ts.ci_public_key;
     config.at_private_key = ts.at_private_key;
     config.at_public_key = ts.at_public_key;
+    config.amf_private_key = ts.mod_private_key;
     config.amf_public_key = ts.mod_public_key;  // Using AMF keygen!
     config.enrollment_duration_days = 30;
     
@@ -344,6 +345,7 @@ TEST_CASE("ServerConfig env string serialization round trip", "[enrollment]") {
     REQUIRE(env_str.find("CI_PK=") != std::string::npos);
     REQUIRE(env_str.find("AT_SK=") != std::string::npos);
     REQUIRE(env_str.find("AT_VK=") != std::string::npos);
+    REQUIRE(env_str.find("AMF_SK=") != std::string::npos);
     REQUIRE(env_str.find("AMF_PK=") != std::string::npos);
     REQUIRE(env_str.find("ENROLLMENT_DURATION_DAYS=45") != std::string::npos);
     
@@ -355,6 +357,7 @@ TEST_CASE("ServerConfig env string serialization round trip", "[enrollment]") {
     REQUIRE(restored.ci_public_key == original.ci_public_key);
     REQUIRE(restored.at_private_key == original.at_private_key);
     REQUIRE(restored.at_public_key == original.at_public_key);
+    REQUIRE(restored.amf_private_key == original.amf_private_key);
     REQUIRE(restored.amf_public_key == original.amf_public_key);
     REQUIRE(restored.enrollment_duration_days == original.enrollment_duration_days);
 }

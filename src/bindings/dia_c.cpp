@@ -604,12 +604,14 @@ int dia_server_config_create(const unsigned char* ci_private_key,
                               size_t at_private_key_len,
                               const unsigned char* at_public_key,
                               size_t at_public_key_len,
+                              const unsigned char* amf_private_key,
+                              size_t amf_private_key_len,
                               const unsigned char* amf_public_key,
                               size_t amf_public_key_len,
                               int enrollment_duration_days,
                               dia_server_config_t** out_config) {
     if (!ci_private_key || !ci_public_key || !at_private_key || 
-        !at_public_key || !amf_public_key || !out_config)
+        !at_public_key || !amf_private_key || !amf_public_key || !out_config)
         return DIA_ERR_INVALID_ARG;
     
     try {
@@ -618,6 +620,7 @@ int dia_server_config_create(const unsigned char* ci_private_key,
         config.ci_public_key = Bytes(ci_public_key, ci_public_key + ci_public_key_len);
         config.at_private_key = Bytes(at_private_key, at_private_key + at_private_key_len);
         config.at_public_key = Bytes(at_public_key, at_public_key + at_public_key_len);
+        config.amf_private_key = Bytes(amf_private_key, amf_private_key + amf_private_key_len);
         config.amf_public_key = Bytes(amf_public_key, amf_public_key + amf_public_key_len);
         config.enrollment_duration_days = enrollment_duration_days > 0 ? enrollment_duration_days : 30;
         
@@ -681,6 +684,7 @@ int dia_server_config_generate(int duration_days, dia_server_config_t** out_conf
         // Generate AMF keypair for Moderator
         amf::Params amf_params = amf::Params::Default();
         amf::KeyPair mod_keypair = amf::KeyGen(amf_params);
+        config.amf_private_key = mod_keypair.sk.to_bytes();
         config.amf_public_key = mod_keypair.pk.to_bytes();
         
         config.enrollment_duration_days = duration_days > 0 ? duration_days : 30;

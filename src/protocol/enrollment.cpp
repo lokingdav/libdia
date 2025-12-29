@@ -466,7 +466,8 @@ std::string ServerConfig::to_env_string() const {
     oss << "AT_SK=" << bytes_to_hex(at_private_key) << "\n";
     oss << "AT_VK=" << bytes_to_hex(at_public_key) << "\n";
     
-    // AMF Moderator public key
+    // AMF Moderator keys
+    oss << "AMF_SK=" << bytes_to_hex(amf_private_key) << "\n";
     oss << "AMF_PK=" << bytes_to_hex(amf_public_key) << "\n";
     
     // Enrollment duration
@@ -511,6 +512,8 @@ ServerConfig ServerConfig::from_env_string(const std::string& env_content) {
             config.at_private_key = hex_to_bytes(value);
         } else if (key == "AT_VK") {
             config.at_public_key = hex_to_bytes(value);
+        } else if (key == "AMF_SK") {
+            config.amf_private_key = hex_to_bytes(value);
         } else if (key == "AMF_PK") {
             config.amf_public_key = hex_to_bytes(value);
         } else if (key == "ENROLLMENT_DURATION_DAYS") {

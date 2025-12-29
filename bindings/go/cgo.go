@@ -664,12 +664,12 @@ type ServerConfig struct {
 }
 
 // NewServerConfig creates a server configuration for enrollment processing.
-func NewServerConfig(ciPrivateKey, ciPublicKey, atPrivateKey, atPublicKey, amfPublicKey []byte, durationDays int) (*ServerConfig, error) {
+func NewServerConfig(ciPrivateKey, ciPublicKey, atPrivateKey, atPublicKey, amfPrivateKey, amfPublicKey []byte, durationDays int) (*ServerConfig, error) {
 	ensureInit()
 
 	if len(ciPrivateKey) == 0 || len(ciPublicKey) == 0 ||
 		len(atPrivateKey) == 0 || len(atPublicKey) == 0 ||
-		len(amfPublicKey) == 0 {
+		len(amfPrivateKey) == 0 || len(amfPublicKey) == 0 {
 		return nil, ErrInvalidArg
 	}
 
@@ -679,6 +679,7 @@ func NewServerConfig(ciPrivateKey, ciPublicKey, atPrivateKey, atPublicKey, amfPu
 		(*C.uchar)(&ciPublicKey[0]), C.size_t(len(ciPublicKey)),
 		(*C.uchar)(&atPrivateKey[0]), C.size_t(len(atPrivateKey)),
 		(*C.uchar)(&atPublicKey[0]), C.size_t(len(atPublicKey)),
+		(*C.uchar)(&amfPrivateKey[0]), C.size_t(len(amfPrivateKey)),
 		(*C.uchar)(&amfPublicKey[0]), C.size_t(len(amfPublicKey)),
 		C.int(durationDays), &handle)
 	if err := rcErr(rc); err != nil {

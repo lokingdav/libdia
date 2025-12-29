@@ -117,7 +117,8 @@ struct ServerConfig {
     Bytes at_private_key;
     Bytes at_public_key;
     
-    // Moderator's AMF public key
+    // AMF Moderator keypair
+    Bytes amf_private_key;
     Bytes amf_public_key;
     
     // Enrollment duration in days

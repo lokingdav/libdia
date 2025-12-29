@@ -619,6 +619,9 @@ func TestServerConfig_ToEnv(t *testing.T) {
 	if !strings.Contains(envStr, "AT_VK=") {
 		t.Error("Env should contain AT_VK")
 	}
+	if !strings.Contains(envStr, "AMF_SK=") {
+		t.Error("Env should contain AMF_SK")
+	}
 	if !strings.Contains(envStr, "AMF_PK=") {
 		t.Error("Env should contain AMF_PK")
 	}
@@ -706,7 +709,7 @@ func TestServerConfig_FromEnvWithComments(t *testing.T) {
 
 	// Add comments and whitespace to the env string
 	envWithComments := "# Server configuration\n" + envStr + "\n# End of config\n"
-	
+
 	cfg, err := ServerConfigFromEnv(envWithComments)
 	if err != nil {
 		t.Fatalf("ServerConfigFromEnv: %v", err)

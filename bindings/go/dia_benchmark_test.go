@@ -51,6 +51,7 @@ func BenchmarkEnrollment_FullFlow(b *testing.B) {
 	ciPublic := make([]byte, 96)
 	atPrivate := make([]byte, 32)
 	atPublic := make([]byte, 96)
+	amfPrivate := make([]byte, 32)
 	amfPublic := make([]byte, 48)
 	for i := range ciPrivate {
 		ciPrivate[i] = byte(i + 1)
@@ -64,11 +65,14 @@ func BenchmarkEnrollment_FullFlow(b *testing.B) {
 	for i := range atPublic {
 		atPublic[i] = byte(i + 30)
 	}
+	for i := range amfPrivate {
+		amfPrivate[i] = byte(i + 35)
+	}
 	for i := range amfPublic {
 		amfPublic[i] = byte(i + 40)
 	}
 
-	serverCfg, err := NewServerConfig(ciPrivate, ciPublic, atPrivate, atPublic, amfPublic, 30)
+	serverCfg, err := NewServerConfig(ciPrivate, ciPublic, atPrivate, atPublic, amfPrivate, amfPublic, 30)
 	if err != nil {
 		b.Fatalf("NewServerConfig: %v", err)
 	}
@@ -412,6 +416,7 @@ func BenchmarkProtocol_FullCallSetup(b *testing.B) {
 	ciPublic := make([]byte, 96)
 	atPrivate := make([]byte, 32)
 	atPublic := make([]byte, 96)
+	amfPrivate := make([]byte, 32)
 	amfPublic := make([]byte, 48)
 	for i := range ciPrivate {
 		ciPrivate[i] = byte(i + 1)
@@ -425,11 +430,14 @@ func BenchmarkProtocol_FullCallSetup(b *testing.B) {
 	for i := range atPublic {
 		atPublic[i] = byte(i + 30)
 	}
+	for i := range amfPrivate {
+		amfPrivate[i] = byte(i + 35)
+	}
 	for i := range amfPublic {
 		amfPublic[i] = byte(i + 40)
 	}
 
-	serverCfg, _ := NewServerConfig(ciPrivate, ciPublic, atPrivate, atPublic, amfPublic, 30)
+	serverCfg, _ := NewServerConfig(ciPrivate, ciPublic, atPrivate, atPublic, amfPrivate, amfPublic, 30)
 	defer serverCfg.Close()
 
 	// Pre-enroll both parties

@@ -63,6 +63,7 @@ struct TestServerConfig {
     Bytes ci_public_key;
     Bytes at_private_key;
     Bytes at_public_key;
+    Bytes mod_private_key;
     Bytes mod_public_key;
 };
 
@@ -85,6 +86,7 @@ inline TestServerConfig create_server_config() {
     // Moderator AMF keypair (uses AMF keygen!)
     amf::Params amf_params = amf::Params::Default();
     cfg.mod_keypair = amf::KeyGen(amf_params);
+    cfg.mod_private_key = cfg.mod_keypair.sk.to_bytes();
     cfg.mod_public_key = cfg.mod_keypair.pk.to_bytes();
     
     return cfg;

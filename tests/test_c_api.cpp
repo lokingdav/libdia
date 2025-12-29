@@ -283,6 +283,7 @@ TEST_CASE("Enrollment API full flow", "[c_api][enrollment]") {
         server_keys.ci_public_key.data(), server_keys.ci_public_key.size(),
         server_keys.at_private_key.data(), server_keys.at_private_key.size(),
         server_keys.at_public_key.data(), server_keys.at_public_key.size(),
+        server_keys.mod_private_key.data(), server_keys.mod_private_key.size(),
         server_keys.mod_public_key.data(), server_keys.mod_public_key.size(),
         30,  // enrollment_duration_days
         &server_cfg
@@ -377,6 +378,7 @@ TEST_CASE("ServerConfig env string serialization", "[c_api][enrollment]") {
     REQUIRE(env.find("CI_PK=") != std::string::npos);
     REQUIRE(env.find("AT_SK=") != std::string::npos);
     REQUIRE(env.find("AT_VK=") != std::string::npos);
+    REQUIRE(env.find("AMF_SK=") != std::string::npos);
     REQUIRE(env.find("AMF_PK=") != std::string::npos);
     REQUIRE(env.find("ENROLLMENT_DURATION_DAYS=45") != std::string::npos);
     
