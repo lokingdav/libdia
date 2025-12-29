@@ -65,7 +65,7 @@ struct AkeState {
 };
 
 // -----------------------------------------------------------------------------
-// RuaState - State for Rich User Authentication phase
+// RuaState - State for Right-To-Use Authentication phase
 // -----------------------------------------------------------------------------
 struct RuaState {
     Bytes                     topic;

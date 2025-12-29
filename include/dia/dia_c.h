@@ -193,7 +193,7 @@ int dia_ake_finalize(dia_callstate_t* state,
                      size_t msg_len);
 
 /*==============================================================================
- * RUA Protocol (Rich User Authentication)
+ * RUA Protocol (Right-To-Use Authentication)
  *============================================================================*/
 
 /**

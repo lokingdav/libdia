@@ -61,7 +61,7 @@ struct AkeMessage {
 };
 
 // -----------------------------------------------------------------------------
-// RuaMessage - Rich User Authentication message
+// RuaMessage - Right-To-Use Authentication message
 // -----------------------------------------------------------------------------
 struct RuaMessage {
     Bytes       dh_pk;   // DH public key for RUA phase

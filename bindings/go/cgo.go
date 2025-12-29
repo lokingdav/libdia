@@ -1,8 +1,8 @@
-// Package dia provides Go bindings for the DIA (Digital Identity Authentication) protocol.
+// Package dia provides Go bindings for the DIA (Dynamic Identity Authentication) protocol.
 //
 // The package provides a high-level API for:
 //   - Enrollment: registering users with the system
-//   - Call authentication: AKE (Authenticated Key Exchange) and RUA (Rich User Authentication)
+//   - Call authentication: AKE (Authenticated Key Exchange) and RUA (Right-To-Use Authentication)
 //   - Secure messaging: Double Ratchet encrypted communication
 //
 // Building for development (from source):
@@ -370,7 +370,7 @@ func (cs *CallState) AKEFinalize(complete []byte) error {
 }
 
 // ============================================================================
-// RUA Protocol (Rich User Authentication)
+// RUA Protocol (Right-To-Use Authentication)
 // ============================================================================
 
 // RUADeriveTopic derives the RUA topic from the shared key.
