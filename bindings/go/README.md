@@ -70,6 +70,20 @@ PKG_CONFIG_PATH=/path/to/libdia/build go build
 
 ## Quick Start
 
+### Memory Management
+
+**Automatic cleanup**: All DIA objects (`Config`, `CallState`, `ServerConfig`, `EnrollmentKeys`, `Message`) are automatically freed when garbage collected. Go's runtime will call finalizers in the background to release C resources - you don't need to do anything special.
+
+**Manual cleanup (recommended)**: For immediate resource release, especially in long-running applications or tight loops, use `defer obj.Close()`:
+
+```go
+config, err := dia.FinalizeEnrollment(keys, response, phone, name, logoURL)
+if err != nil {
+    log.Fatal(err)
+}
+defer config.Close()  // Recommended for immediate cleanup
+```
+
 ### Basic Enrollment Flow
 
 ```go

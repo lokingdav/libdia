@@ -21,6 +21,7 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
 	"unsafe"
 )
@@ -96,7 +97,9 @@ func ConfigFromEnv(envContent string) (*Config, error) {
 	if err := rcErr(rc); err != nil {
 		return nil, err
 	}
-	return &Config{handle: handle}, nil
+	cfg := &Config{handle: handle}
+	runtime.SetFinalizer(cfg, (*Config).Close)
+	return cfg, nil
 }
 
 // ToEnv serializes the config to environment variable format string.
@@ -163,7 +166,9 @@ func NewCallState(cfg *Config, phone string, outgoing bool) (*CallState, error) 
 	if err := rcErr(rc); err != nil {
 		return nil, err
 	}
-	return &CallState{handle: handle}, nil
+	cs := &CallState{handle: handle}
+	runtime.SetFinalizer(cs, (*CallState).Close)
+	return cs, nil
 }
 
 // Close releases the call state resources.
@@ -498,12 +503,14 @@ func ParseMessage(data []byte) (*Message, error) {
 	if err := rcErr(rc); err != nil {
 		return nil, err
 	}
-	return &Message{handle: handle}, nil
+	msg := &Message{handle: handle}
+	runtime.SetFinalizer(msg, (*Message).Close)
+	return msg, nil
 }
 
 // Close releases the message resources.
 func (m *Message) Close() {
-	if m.handle != nil {
+	if m != nil && m.handle != nil {
 		C.dia_message_destroy(m.handle)
 		m.handle = nil
 	}
@@ -608,7 +615,9 @@ func CreateEnrollmentRequest(phone, name, logoURL string, numTickets int) (*Enro
 	defer C.dia_free_bytes(requestData)
 
 	request := C.GoBytes(unsafe.Pointer(requestData), C.int(requestLen))
-	return &EnrollmentKeys{handle: keysHandle}, request, nil
+	keys := &EnrollmentKeys{handle: keysHandle}
+	runtime.SetFinalizer(keys, (*EnrollmentKeys).Close)
+	return keys, request, nil
 }
 
 // Close releases the enrollment keys resources.
@@ -640,7 +649,9 @@ func FinalizeEnrollment(keys *EnrollmentKeys, response []byte, phone, name, logo
 	if err := rcErr(rc); err != nil {
 		return nil, err
 	}
-	return &Config{handle: cfgHandle}, nil
+	cfg := &Config{handle: cfgHandle}
+	runtime.SetFinalizer(cfg, (*Config).Close)
+	return cfg, nil
 }
 
 // ============================================================================
@@ -673,7 +684,9 @@ func NewServerConfig(ciPrivateKey, ciPublicKey, atPrivateKey, atPublicKey, amfPu
 	if err := rcErr(rc); err != nil {
 		return nil, err
 	}
-	return &ServerConfig{handle: handle}, nil
+	sc := &ServerConfig{handle: handle}
+	runtime.SetFinalizer(sc, (*ServerConfig).Close)
+	return sc, nil
 }
 
 // Close releases the server config resources.
@@ -694,7 +707,9 @@ func GenerateServerConfig(durationDays int) (*ServerConfig, error) {
 	if err := rcErr(rc); err != nil {
 		return nil, err
 	}
-	return &ServerConfig{handle: handle}, nil
+	sc := &ServerConfig{handle: handle}
+	runtime.SetFinalizer(sc, (*ServerConfig).Close)
+	return sc, nil
 }
 
 // ProcessEnrollment processes a client enrollment request and returns the response.
