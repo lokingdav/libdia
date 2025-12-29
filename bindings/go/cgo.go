@@ -769,3 +769,23 @@ func ServerConfigFromEnv(envContent string) (*ServerConfig, error) {
 	runtime.SetFinalizer(sc, (*ServerConfig).Close)
 	return sc, nil
 }
+
+// VerifyTicket verifies a ticket using the VOPRF verification key.
+// Used by relay server when client consumes a ticket to create a new topic.
+// Returns true if the ticket is valid, false otherwise.
+func VerifyTicket(ticketData []byte, verifyKey []byte) (bool, error) {
+	ensureInit()
+
+	if len(ticketData) == 0 || len(verifyKey) == 0 {
+		return false, ErrInvalidArg
+	}
+
+	rc := C.dia_verify_ticket(
+		(*C.uchar)(&ticketData[0]), C.size_t(len(ticketData)),
+		(*C.uchar)(&verifyKey[0]), C.size_t(len(verifyKey)))
+
+	if rc < 0 {
+		return false, rcErr(rc)
+	}
+	return rc == 1, nil
+}

@@ -181,6 +181,23 @@ bool check_expiry(const Bytes& expiration) {
     return now < expiry_time;
 }
 
+bool verify_ticket(
+    const Ticket& ticket,
+    const Bytes& verification_key)
+{
+    // Parse the verification key (VOPRF public key)
+    G2Point vk = G2Point::from_bytes(verification_key);
+    
+    // Parse the ticket output (unblinded VOPRF result)
+    G1Point output = G1Point::from_bytes(ticket.t2);
+    
+    // Convert ticket input to string
+    std::string input_str(ticket.t1.begin(), ticket.t1.end());
+    
+    // Verify using VOPRF
+    return voprf::verify(input_str, output, vk);
+}
+
 // -----------------------------------------------------------------------------
 // Ticket generation
 // -----------------------------------------------------------------------------

@@ -761,3 +761,27 @@ int dia_server_config_to_env_string(const dia_server_config_t* cfg, char** out) 
         return DIA_ERR;
     }
 }
+
+int dia_verify_ticket(const unsigned char* ticket_data,
+                      size_t ticket_len,
+                      const unsigned char* verify_key,
+                      size_t verify_key_len) {
+    if (!ticket_data || ticket_len == 0 || !verify_key || verify_key_len == 0) {
+        return DIA_ERR_INVALID_ARG;
+    }
+    
+    try {
+        // Deserialize ticket
+        Bytes ticket_bytes(ticket_data, ticket_data + ticket_len);
+        Ticket ticket = Ticket::from_bytes(ticket_bytes);
+        
+        // Get verification key
+        Bytes vk_bytes(verify_key, verify_key + verify_key_len);
+        
+        // Verify ticket
+        bool valid = verify_ticket(ticket, vk_bytes);
+        return valid ? 1 : 0;
+    } catch (...) {
+        return DIA_ERR;
+    }
+}

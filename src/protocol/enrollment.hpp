@@ -179,6 +179,13 @@ Bytes make_expiration(int days);
 // Check if expiration is valid and not expired
 bool check_expiry(const Bytes& expiration);
 
+// Verify a ticket using the server's VOPRF verification key
+// Returns true if the ticket is valid, false otherwise
+bool verify_ticket(
+    const Ticket& ticket,
+    const Bytes& verification_key
+);
+
 } // namespace protocol
 
 #endif // DIA_PROTOCOL_ENROLLMENT_HPP

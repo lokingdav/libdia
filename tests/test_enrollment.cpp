@@ -328,6 +328,47 @@ TEST_CASE("Finalized ticket can be verified", "[enrollment]") {
     ecgroup::G2Point vk = ecgroup::G2Point::from_bytes(response.ticket_verify_key);
     
     REQUIRE(voprf::verify(input_str, output, vk));
+    
+    // Also test the verify_ticket helper function
+    REQUIRE(verify_ticket(ticket, response.ticket_verify_key));
+}
+
+TEST_CASE("verify_ticket validates finalized tickets", "[enrollment]") {
+    init_crypto();
+    
+    // Setup server
+    ServerConfig server_config = create_test_server_config();
+    
+    // Client creates enrollment request with multiple tickets
+    auto [keys, request] = create_enrollment_request(
+        "+1234567890",
+        "Alice",
+        "https://example.com/logo.png",
+        3
+    );
+    
+    // Server processes enrollment
+    EnrollmentResponse response = process_enrollment(server_config, request);
+    
+    // Finalize tickets
+    std::vector<Ticket> tickets = finalize_tickets(
+        keys.blinded_tickets,
+        response.evaluated_tickets
+    );
+    
+    REQUIRE(tickets.size() == 3);
+    
+    // All tickets should verify with the correct key
+    for (const auto& ticket : tickets) {
+        REQUIRE(verify_ticket(ticket, response.ticket_verify_key));
+    }
+    
+    // Create a tampered ticket (modify the output)
+    Ticket tampered = tickets[0];
+    tampered.t2[0] ^= 0xFF;  // Flip first byte
+    
+    // Tampered ticket should not verify
+    REQUIRE_FALSE(verify_ticket(tampered, response.ticket_verify_key));
 }
 
 TEST_CASE("ServerConfig env string serialization round trip", "[enrollment]") {

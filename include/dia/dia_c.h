@@ -440,6 +440,20 @@ int dia_server_config_from_env_string(const char* env_content, dia_server_config
  */
 int dia_server_config_to_env_string(const dia_server_config_t* cfg, char** out);
 
+/**
+ * Verify a ticket using the VOPRF verification key.
+ * Used by relay server when client consumes a ticket to create a new topic.
+ * @param ticket_data  Serialized ticket bytes
+ * @param ticket_len   Length of ticket data
+ * @param verify_key   VOPRF verification key (AT public key)
+ * @param verify_key_len Length of verification key
+ * @return 1 if ticket is valid, 0 if invalid, negative on error
+ */
+int dia_verify_ticket(const unsigned char* ticket_data,
+                      size_t ticket_len,
+                      const unsigned char* verify_key,
+                      size_t verify_key_len);
+
 #ifdef __cplusplus
 }
 #endif

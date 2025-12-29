@@ -2,6 +2,7 @@ package dia
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -731,6 +732,112 @@ func TestServerConfig_FromEnvWithComments(t *testing.T) {
 	if len(response) == 0 {
 		t.Error("Response should not be empty")
 	}
+}
+
+func TestVerifyTicket(t *testing.T) {
+	// Generate server config
+	serverCfg, err := GenerateServerConfig(30)
+	if err != nil {
+		t.Fatalf("GenerateServerConfig: %v", err)
+	}
+	defer serverCfg.Close()
+
+	// Get the verification key (AT public key) from server config
+	vkEnv, err := serverCfg.ToEnv()
+	if err != nil {
+		t.Fatalf("ToEnv: %v", err)
+	}
+
+	// Parse to get AT_VK
+	var verifyKey []byte
+	for _, line := range strings.Split(vkEnv, "\n") {
+		if strings.HasPrefix(line, "AT_VK=") {
+			hexStr := strings.TrimPrefix(line, "AT_VK=")
+			verifyKey, err = hexDecode(hexStr)
+			if err != nil {
+				t.Fatalf("hexDecode: %v", err)
+			}
+			break
+		}
+	}
+	if len(verifyKey) == 0 {
+		t.Fatal("Could not find AT_VK in server config")
+	}
+
+	// Create and process enrollment to get tickets
+	keys, request, err := CreateEnrollmentRequest("+1234567890", "Alice", "https://example.com", 2)
+	if err != nil {
+		t.Fatalf("CreateEnrollmentRequest: %v", err)
+	}
+	defer keys.Close()
+
+	response, err := serverCfg.ProcessEnrollment(request)
+	if err != nil {
+		t.Fatalf("ProcessEnrollment: %v", err)
+	}
+
+	cfg, err := FinalizeEnrollment(keys, response, "+1234567890", "Alice", "https://example.com")
+	if err != nil {
+		t.Fatalf("FinalizeEnrollment: %v", err)
+	}
+	defer cfg.Close()
+
+	// Get the sample ticket from config
+	envStr, err := cfg.ToEnv()
+	if err != nil {
+		t.Fatalf("ToEnv: %v", err)
+	}
+
+	var ticketData []byte
+	for _, line := range strings.Split(envStr, "\n") {
+		if strings.HasPrefix(line, "SAMPLE_TICKET=") {
+			hexStr := strings.TrimPrefix(line, "SAMPLE_TICKET=")
+			ticketData, err = hexDecode(hexStr)
+			if err != nil {
+				t.Fatalf("hexDecode ticket: %v", err)
+			}
+			break
+		}
+	}
+	if len(ticketData) == 0 {
+		t.Fatal("Could not find SAMPLE_TICKET in config")
+	}
+
+	// Verify the ticket
+	valid, err := VerifyTicket(ticketData, verifyKey)
+	if err != nil {
+		t.Fatalf("VerifyTicket: %v", err)
+	}
+	if !valid {
+		t.Error("Ticket should be valid")
+	}
+
+	// Test with tampered ticket (flip a byte)
+	tamperedTicket := make([]byte, len(ticketData))
+	copy(tamperedTicket, ticketData)
+	tamperedTicket[len(tamperedTicket)/2] ^= 0xFF
+
+	valid, err = VerifyTicket(tamperedTicket, verifyKey)
+	if err != nil {
+		t.Fatalf("VerifyTicket (tampered): %v", err)
+	}
+	if valid {
+		t.Error("Tampered ticket should be invalid")
+	}
+}
+
+// hexDecode decodes a hex string to bytes
+func hexDecode(s string) ([]byte, error) {
+	result := make([]byte, len(s)/2)
+	for i := 0; i < len(result); i++ {
+		var b byte
+		_, err := fmt.Sscanf(s[i*2:i*2+2], "%02x", &b)
+		if err != nil {
+			return nil, err
+		}
+		result[i] = b
+	}
+	return result, nil
 }
 
 // ============================================================================
