@@ -30,6 +30,8 @@ extern "C" {
 #define DIA_MSG_RUA_RESPONSE  5
 #define DIA_MSG_HEARTBEAT     6
 #define DIA_MSG_BYE           7
+#define DIA_MSG_ODA_REQUEST   8
+#define DIA_MSG_ODA_RESPONSE  9
 
 /*==============================================================================
  * Opaque handles
@@ -53,6 +55,20 @@ typedef struct dia_remote_party_t {
 } dia_remote_party_t;
 
 /*==============================================================================
+ * ODA verification info (returned by dia_oda_get_verifications)
+ *============================================================================*/
+typedef struct dia_oda_verification_t {
+    char*  timestamp;
+    int    verified;
+    char*  issuer;
+    char*  credential_type;
+    char*  issuance_date;
+    char*  expiration_date;
+    char** attribute_names;   // NULL-terminated array
+    char** attribute_values;  // NULL-terminated array (parallel to names)
+} dia_oda_verification_t;
+
+/*==============================================================================
  * Init / Utilities
  *============================================================================*/
 
@@ -67,6 +83,9 @@ void dia_free_bytes(unsigned char* buf);
 
 /** Free a remote party struct (and its string members). */
 void dia_free_remote_party(dia_remote_party_t* rp);
+
+/** Free an ODA verification struct (and its string members). */
+void dia_free_oda_verification(dia_oda_verification_t* info);
 
 /*==============================================================================
  * Config API
@@ -230,6 +249,77 @@ int dia_rua_response(dia_callstate_t* state,
 int dia_rua_finalize(dia_callstate_t* state,
                      const unsigned char* msg_data,
                      size_t msg_len);
+
+/*==============================================================================
+ * ODA Protocol (On-Demand Authentication)
+ *============================================================================*/
+
+/**
+ * Create ODA request with requested attributes.
+ * Caller must free output with dia_free_bytes().
+ * 
+ * @param state CallState handle
+ * @param attributes NULL-terminated array of attribute names to request
+ * @param out Output buffer for encrypted ODA request
+ * @param out_len Output buffer length
+ * @return DIA_OK on success
+ */
+int dia_oda_request(dia_callstate_t* state,
+                    const char** attributes,
+                    unsigned char** out,
+                    size_t* out_len);
+
+/**
+ * Process ODA request and create response with presentation.
+ * Caller must free output with dia_free_bytes().
+ * 
+ * @param state CallState handle
+ * @param msg_data Encrypted ODA request message
+ * @param msg_len Message length
+ * @param out Output buffer for encrypted ODA response
+ * @param out_len Output buffer length
+ * @return DIA_OK on success
+ */
+int dia_oda_response(dia_callstate_t* state,
+                     const unsigned char* msg_data,
+                     size_t msg_len,
+                     unsigned char** out,
+                     size_t* out_len);
+
+/**
+ * Verify ODA response presentation.
+ * 
+ * @param state CallState handle
+ * @param msg_data Encrypted ODA response message
+ * @param msg_len Message length
+ * @param result Output verification result
+ * @return DIA_OK on success
+ */
+int dia_oda_verify(dia_callstate_t* state,
+                   const unsigned char* msg_data,
+                   size_t msg_len,
+                   dia_oda_verification_t** result);
+
+/**
+ * Get count of ODA verifications performed.
+ * 
+ * @param state CallState handle
+ * @return Number of verifications
+ */
+int dia_oda_get_verification_count(const dia_callstate_t* state);
+
+/**
+ * Get ODA verification info by index.
+ * Caller must free with dia_free_oda_verification().
+ * 
+ * @param state CallState handle
+ * @param index Verification index (0 to count-1)
+ * @param out Output verification info
+ * @return DIA_OK on success
+ */
+int dia_oda_get_verification(const dia_callstate_t* state,
+                             size_t index,
+                             dia_oda_verification_t** out);
 
 /*==============================================================================
  * Message Handling

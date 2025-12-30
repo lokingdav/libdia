@@ -25,6 +25,7 @@ set(TEST_SRC_FILES
     test_ake.cpp
     test_enrollment.cpp
     test_rua.cpp
+    test_oda.cpp
     test_c_api.cpp
 )
 add_executable(run_dia_tests ${TEST_SRC_FILES})

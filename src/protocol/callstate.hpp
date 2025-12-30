@@ -8,6 +8,8 @@
 #include <mutex>
 #include <optional>
 #include <memory>
+#include <map>
+#include <vector>
 
 namespace protocol {
 
@@ -87,6 +89,20 @@ struct RemotePartyInfo {
 };
 
 // -----------------------------------------------------------------------------
+// OdaVerificationInfo - Information from an ODA verification
+// -----------------------------------------------------------------------------
+struct OdaVerificationInfo {
+    std::string                        timestamp;            // When verification occurred
+    bool                               verified;             // Verification success
+    std::map<std::string, std::string> disclosed_attributes; // Disclosed attribute values
+    std::string                        issuer;               // Credential issuer
+    std::string                        credential_type;      // Type of credential
+    std::string                        issuance_date;        // Credential issuance date
+    std::string                        expiration_date;      // Credential expiration
+    std::vector<std::string>           requested_attributes; // What was requested
+};
+
+// -----------------------------------------------------------------------------
 // CallState - Main state container for a call session
 // -----------------------------------------------------------------------------
 class CallState {
@@ -128,6 +144,10 @@ public:
     RuaState    rua;
     RemotePartyInfo remote_party;  // Visible info about remote party after RUA
     ClientConfig config;
+    
+    // ODA (On-Demand Authentication) state
+    std::vector<OdaVerificationInfo> oda_verifications;  // History of ODA verifications
+    std::optional<OdaMessage>        pending_oda_request; // Current pending request (if verifier)
     
     // Double Ratchet session (initialized after AKE completes)
     std::unique_ptr<doubleratchet::DrSession> dr_session;

@@ -3,6 +3,7 @@
 #include "../protocol/messages.hpp"
 #include "../protocol/ake.hpp"
 #include "../protocol/rua.hpp"
+#include "../protocol/oda.hpp"
 #include "../protocol/enrollment.hpp"
 #include "../crypto/ecgroup.hpp"
 #include "../crypto/bbs.hpp"
@@ -83,6 +84,32 @@ void dia_free_remote_party(dia_remote_party_t* rp) {
         dia_free_string(rp->name);
         dia_free_string(rp->logo);
         delete rp;
+    }
+}
+
+void dia_free_oda_verification(dia_oda_verification_t* info) {
+    if (info) {
+        dia_free_string(info->timestamp);
+        dia_free_string(info->issuer);
+        dia_free_string(info->credential_type);
+        dia_free_string(info->issuance_date);
+        dia_free_string(info->expiration_date);
+        
+        if (info->attribute_names) {
+            for (size_t i = 0; info->attribute_names[i] != nullptr; ++i) {
+                dia_free_string(info->attribute_names[i]);
+            }
+            delete[] info->attribute_names;
+        }
+        
+        if (info->attribute_values) {
+            for (size_t i = 0; info->attribute_values[i] != nullptr; ++i) {
+                dia_free_string(info->attribute_values[i]);
+            }
+            delete[] info->attribute_values;
+        }
+        
+        delete info;
     }
 }
 
@@ -781,6 +808,148 @@ int dia_verify_ticket(const unsigned char* ticket_data,
         // Verify ticket
         bool valid = verify_ticket(ticket, vk_bytes);
         return valid ? 1 : 0;
+    } catch (...) {
+        return DIA_ERR;
+    }
+}
+
+/*==============================================================================
+ * ODA Protocol
+ *============================================================================*/
+
+int dia_oda_request(dia_callstate_t* state,
+                    const char** attributes,
+                    unsigned char** out,
+                    size_t* out_len) {
+    if (!state || !attributes || !out || !out_len) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        // Convert C string array to vector
+        std::vector<std::string> attrs;
+        for (size_t i = 0; attributes[i] != nullptr; ++i) {
+            attrs.push_back(std::string(attributes[i]));
+        }
+        
+        // Create ODA request
+        Bytes result = oda_request(*state->state, attrs);
+        copy_to_c_bytes(result, out, out_len);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR_PROTOCOL;
+    }
+}
+
+int dia_oda_response(dia_callstate_t* state,
+                     const unsigned char* msg_data,
+                     size_t msg_len,
+                     unsigned char** out,
+                     size_t* out_len) {
+    if (!state || !msg_data || !out || !out_len) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        // Decrypt and deserialize message
+        Bytes ciphertext(msg_data, msg_data + msg_len);
+        Bytes plaintext = state->state->dr_session->decrypt(ciphertext);
+        ProtocolMessage request_msg = ProtocolMessage::deserialize(plaintext);
+        
+        // Create ODA response
+        Bytes result = oda_response(*state->state, request_msg);
+        copy_to_c_bytes(result, out, out_len);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR_PROTOCOL;
+    }
+}
+
+int dia_oda_verify(dia_callstate_t* state,
+                   const unsigned char* msg_data,
+                   size_t msg_len,
+                   dia_oda_verification_t** result) {
+    if (!state || !msg_data || !result) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        // Decrypt and deserialize message
+        Bytes ciphertext(msg_data, msg_data + msg_len);
+        Bytes plaintext = state->state->dr_session->decrypt(ciphertext);
+        ProtocolMessage response_msg = ProtocolMessage::deserialize(plaintext);
+        
+        // Verify presentation
+        auto verification = oda_verify(*state->state, response_msg);
+        
+        // Convert to C struct
+        auto* info = new dia_oda_verification_t();
+        info->verified = verification.verified ? 1 : 0;
+        
+        // Get the last verification from state (just added by oda_verify)
+        const auto& last_verification = state->state->oda_verifications.back();
+        info->timestamp = copy_to_c_string(last_verification.timestamp);
+        info->issuer = copy_to_c_string(verification.issuer);
+        info->credential_type = copy_to_c_string(verification.credential_type);
+        info->issuance_date = copy_to_c_string(verification.issuance_date);
+        info->expiration_date = copy_to_c_string(verification.expiration_date);
+        
+        // Convert attributes map to parallel arrays
+        size_t attr_count = verification.disclosed_attributes.size();
+        info->attribute_names = new char*[attr_count + 1];
+        info->attribute_values = new char*[attr_count + 1];
+        
+        size_t idx = 0;
+        for (const auto& [name, value] : verification.disclosed_attributes) {
+            info->attribute_names[idx] = copy_to_c_string(name);
+            info->attribute_values[idx] = copy_to_c_string(value);
+            ++idx;
+        }
+        info->attribute_names[attr_count] = nullptr;
+        info->attribute_values[attr_count] = nullptr;
+        
+        *result = info;
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR_PROTOCOL;
+    }
+}
+
+int dia_oda_get_verification_count(const dia_callstate_t* state) {
+    if (!state) return 0;
+    return static_cast<int>(state->state->oda_verifications.size());
+}
+
+int dia_oda_get_verification(const dia_callstate_t* state,
+                             size_t index,
+                             dia_oda_verification_t** out) {
+    if (!state || !out) return DIA_ERR_INVALID_ARG;
+    
+    try {
+        if (index >= state->state->oda_verifications.size()) {
+            return DIA_ERR_INVALID_ARG;
+        }
+        
+        const auto& verification = state->state->oda_verifications[index];
+        
+        auto* info = new dia_oda_verification_t();
+        info->verified = verification.verified ? 1 : 0;
+        info->timestamp = copy_to_c_string(verification.timestamp);
+        info->issuer = copy_to_c_string(verification.issuer);
+        info->credential_type = copy_to_c_string(verification.credential_type);
+        info->issuance_date = copy_to_c_string(verification.issuance_date);
+        info->expiration_date = copy_to_c_string(verification.expiration_date);
+        
+        // Convert attributes map to parallel arrays
+        size_t attr_count = verification.disclosed_attributes.size();
+        info->attribute_names = new char*[attr_count + 1];
+        info->attribute_values = new char*[attr_count + 1];
+        
+        size_t idx = 0;
+        for (const auto& [name, value] : verification.disclosed_attributes) {
+            info->attribute_names[idx] = copy_to_c_string(name);
+            info->attribute_values[idx] = copy_to_c_string(value);
+            ++idx;
+        }
+        info->attribute_names[attr_count] = nullptr;
+        info->attribute_values[attr_count] = nullptr;
+        
+        *out = info;
+        return DIA_OK;
     } catch (...) {
         return DIA_ERR;
     }

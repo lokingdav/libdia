@@ -105,6 +105,41 @@ Bytes RuaMessage::serialize_for_signing() const {
 }
 
 // -----------------------------------------------------------------------------
+// OdaMessage serialization
+// -----------------------------------------------------------------------------
+
+Bytes OdaMessage::serialize() const {
+    Bytes out;
+    append_lp(out, nonce);
+    
+    // Serialize requested_attributes as length-prefixed vector
+    append_u32_be(out, static_cast<uint32_t>(requested_attributes.size()));
+    for (const auto& attr : requested_attributes) {
+        append_lp(out, to_bytes(attr));
+    }
+    
+    append_lp(out, presentation);
+    return out;
+}
+
+OdaMessage OdaMessage::deserialize(const Bytes& data) {
+    OdaMessage msg;
+    size_t off = 0;
+    
+    msg.nonce = read_lp(data, off);
+    
+    // Deserialize requested_attributes
+    uint32_t attr_count = read_u32_be(data, off);
+    msg.requested_attributes.reserve(attr_count);
+    for (uint32_t i = 0; i < attr_count; ++i) {
+        msg.requested_attributes.push_back(read_string(data, off));
+    }
+    
+    msg.presentation = read_lp(data, off);
+    return msg;
+}
+
+// -----------------------------------------------------------------------------
 // ProtocolMessage serialization
 // -----------------------------------------------------------------------------
 

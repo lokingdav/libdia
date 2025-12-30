@@ -23,7 +23,9 @@ enum class MessageType : uint8_t {
     RuaRequest  = 4,
     RuaResponse = 5,
     Heartbeat   = 6,
-    Bye         = 7
+    Bye         = 7,
+    OdaRequest  = 8,
+    OdaResponse = 9
 };
 
 // -----------------------------------------------------------------------------
@@ -79,6 +81,18 @@ struct RuaMessage {
 };
 
 // -----------------------------------------------------------------------------
+// OdaMessage - On-Demand Authentication message
+// -----------------------------------------------------------------------------
+struct OdaMessage {
+    Bytes                    nonce;                 // Challenge nonce for freshness
+    std::vector<std::string> requested_attributes;  // Attributes to selectively disclose
+    Bytes                    presentation;          // Wallet presentation (signed by prover)
+
+    Bytes serialize() const;
+    static OdaMessage deserialize(const Bytes& data);
+};
+
+// -----------------------------------------------------------------------------
 // ProtocolMessage - Envelope for all protocol messages
 // -----------------------------------------------------------------------------
 struct ProtocolMessage {
@@ -98,6 +112,8 @@ struct ProtocolMessage {
     bool is_rua_response() const { return type == MessageType::RuaResponse; }
     bool is_heartbeat() const    { return type == MessageType::Heartbeat; }
     bool is_bye() const          { return type == MessageType::Bye; }
+    bool is_oda_request() const  { return type == MessageType::OdaRequest; }
+    bool is_oda_response() const { return type == MessageType::OdaResponse; }
 };
 
 // -----------------------------------------------------------------------------
