@@ -1,4 +1,5 @@
 // dia_jni.cpp
+// JNI bindings for DIA Protocol - matches the C interface (dia_c.h)
 #include <jni.h>
 #include <string>
 #include <vector>
@@ -23,16 +24,6 @@ static void throwRuntime(JNIEnv* env, const std::string& msg) {
     env->ThrowNew(ex, msg.c_str());
 }
 
-static bool checkLen(JNIEnv* env, jbyteArray arr, jsize want, const char* name) {
-    if (!arr) { throwIllegalArg(env, (std::string(name) + " is null").c_str()); return false; }
-    const jsize got = env->GetArrayLength(arr);
-    if (got != want) {
-        throwIllegalArg(env, (std::string(name) + " wrong length").c_str());
-        return false;
-    }
-    return true;
-}
-
 static std::vector<unsigned char> getBytes(JNIEnv* env, jbyteArray arr) {
     std::vector<unsigned char> out;
     if (!arr) return out;
@@ -54,10 +45,6 @@ static jbyteArray makeByteArray(JNIEnv* env, const unsigned char* data, size_t l
     return arr;
 }
 
-static jbyteArray makeByteArray(JNIEnv* env, const std::vector<unsigned char>& v) {
-    return makeByteArray(env, v.data(), v.size());
-}
-
 static jobjectArray make2DByteArray(JNIEnv* env, jsize outerLen) {
     jclass baClass = env->FindClass("[B");
     return env->NewObjectArray(outerLen, baClass, nullptr);
@@ -76,405 +63,652 @@ static bool rcIsOk(JNIEnv* env, const char* op, int rc) {
     return false;
 }
 
-/* Java byte[][] → vectors + raw pointer arrays */
-struct CArrayBytes {
-    std::vector<std::vector<unsigned char>> store;
-    std::vector<const unsigned char*> ptrs;
-    std::vector<size_t> lens;
-};
+/* ========================== Config API ==================================== */
 
-static CArrayBytes toCArrayBytes(JNIEnv* env, jobjectArray jarr) {
-    CArrayBytes out;
-    if (!jarr) return out;
-    const jsize n = env->GetArrayLength(jarr);
-    out.store.resize(n);
-    out.ptrs.resize(n);
-    out.lens.resize(n);
-    for (jsize i = 0; i < n; ++i) {
-        auto elt = static_cast<jbyteArray>(env->GetObjectArrayElement(jarr, i));
-        if (elt) {
-            out.store[i] = getBytes(env, elt);
-            out.ptrs[i] = out.store[i].data();
-            out.lens[i] = out.store[i].size();
-            env->DeleteLocalRef(elt);
-        } else {
-            out.ptrs[i] = nullptr;
-            out.lens[i] = 0;
-        }
+static jlong native_configFromEnv(JNIEnv* env, jclass, jstring jEnvContent) {
+    if (!jEnvContent) {
+        throwIllegalArg(env, "envContent is null");
+        return 0;
     }
-    return out;
+    const char* envContent = env->GetStringUTFChars(jEnvContent, nullptr);
+    if (!envContent) return 0;
+
+    dia_config_t* cfg = nullptr;
+    int rc = dia_config_from_env_string(envContent, &cfg);
+    env->ReleaseStringUTFChars(jEnvContent, envContent);
+
+    if (!rcIsOk(env, "dia_config_from_env_string", rc)) return 0;
+    return reinterpret_cast<jlong>(cfg);
 }
 
-static std::vector<uint32_t> toU32(JNIEnv* env, jintArray a) {
-    std::vector<uint32_t> out;
-    if (!a) return out;
-    const jsize n = env->GetArrayLength(a);
-    out.resize(n);
-    if (n > 0) {
-        std::vector<jint> tmp(n);
-        env->GetIntArrayRegion(a, 0, n, tmp.data());
-        for (jsize i = 0; i < n; ++i) out[i] = static_cast<uint32_t>(tmp[i]);
-    }
-    return out;
-}
-
-/* ================================== DH ==================================== */
-
-static jobjectArray native_dhKeygen(JNIEnv* env, jclass) {
-    unsigned char sk[DIA_FR_LEN], pk[DIA_G1_LEN];
-    if (!rcIsOk(env, "dia_dh_keygen", dia_dh_keygen(sk, pk))) return nullptr;
-
-    jobjectArray out = make2DByteArray(env, 2);
-    set2DByteArrayElem(env, out, 0, sk, DIA_FR_LEN);
-    set2DByteArrayElem(env, out, 1, pk, DIA_G1_LEN);
-    return out;
-}
-
-static jbyteArray native_dhComputeSecret(JNIEnv* env, jclass,
-                                         jbyteArray jsk, jbyteArray jpk) {
-    if (!checkLen(env, jsk, DIA_FR_LEN, "sk")) return nullptr;
-    if (!checkLen(env, jpk, DIA_G1_LEN, "peerPk")) return nullptr;
-
-    auto sk = getBytes(env, jsk);
-    auto pk = getBytes(env, jpk);
-
-    unsigned char sec[DIA_G1_LEN];
-    if (!rcIsOk(env, "dia_dh_compute_secret",
-                dia_dh_compute_secret(sk.data(), pk.data(), sec))) {
+static jstring native_configToEnv(JNIEnv* env, jclass, jlong handle) {
+    if (!handle) {
+        throwIllegalArg(env, "config handle is null");
         return nullptr;
     }
-    return makeByteArray(env, sec, DIA_G1_LEN);
+    auto cfg = reinterpret_cast<dia_config_t*>(handle);
+
+    char* envStr = nullptr;
+    if (!rcIsOk(env, "dia_config_to_env_string", dia_config_to_env_string(cfg, &envStr))) {
+        return nullptr;
+    }
+    jstring result = env->NewStringUTF(envStr);
+    dia_free_string(envStr);
+    return result;
 }
 
-/* ================================ VOPRF ================================= */
-
-static jobjectArray native_voprfKeygen(JNIEnv* env, jclass) {
-    unsigned char sk[DIA_FR_LEN], pk[DIA_G2_LEN];
-    if (!rcIsOk(env, "dia_voprf_keygen", dia_voprf_keygen(sk, pk))) return nullptr;
-
-    jobjectArray out = make2DByteArray(env, 2);
-    set2DByteArrayElem(env, out, 0, sk, DIA_FR_LEN);
-    set2DByteArrayElem(env, out, 1, pk, DIA_G2_LEN);
-    return out;
+static void native_configDestroy(JNIEnv*, jclass, jlong handle) {
+    if (handle) {
+        dia_config_destroy(reinterpret_cast<dia_config_t*>(handle));
+    }
 }
 
-static jobjectArray native_voprfBlind(JNIEnv* env, jclass, jbyteArray input) {
-    std::vector<unsigned char> in = getBytes(env, input);
-    unsigned char blinded[DIA_G1_LEN], blind[DIA_FR_LEN];
-    if (!rcIsOk(env, "dia_voprf_blind",
-                dia_voprf_blind(in.data(), in.size(), blinded, blind))) return nullptr;
+/* ========================== CallState API ================================= */
 
-    jobjectArray out = make2DByteArray(env, 2);
-    set2DByteArrayElem(env, out, 0, blinded, DIA_G1_LEN);
-    set2DByteArrayElem(env, out, 1, blind, DIA_FR_LEN);
-    return out;
+static jlong native_callStateCreate(JNIEnv* env, jclass, jlong configHandle, jstring jPhone, jboolean outgoing) {
+    if (!configHandle) {
+        throwIllegalArg(env, "config handle is null");
+        return 0;
+    }
+    if (!jPhone) {
+        throwIllegalArg(env, "phone is null");
+        return 0;
+    }
+    auto cfg = reinterpret_cast<dia_config_t*>(configHandle);
+    const char* phone = env->GetStringUTFChars(jPhone, nullptr);
+    if (!phone) return 0;
+
+    dia_callstate_t* state = nullptr;
+    int rc = dia_callstate_create(cfg, phone, outgoing ? 1 : 0, &state);
+    env->ReleaseStringUTFChars(jPhone, phone);
+
+    if (!rcIsOk(env, "dia_callstate_create", rc)) return 0;
+    return reinterpret_cast<jlong>(state);
 }
 
-static jbyteArray native_voprfEvaluate(JNIEnv* env, jclass, jbyteArray blinded, jbyteArray sk) {
-    if (!checkLen(env, blinded, DIA_G1_LEN, "blinded")) return nullptr;
-    if (!checkLen(env, sk, DIA_FR_LEN, "sk")) return nullptr;
-
-    auto B = getBytes(env, blinded);
-    auto S = getBytes(env, sk);
-
-    unsigned char element[DIA_G1_LEN];
-    if (!rcIsOk(env, "dia_voprf_evaluate",
-                dia_voprf_evaluate(B.data(), S.data(), element))) return nullptr;
-    return makeByteArray(env, element, DIA_G1_LEN);
+static void native_callStateDestroy(JNIEnv*, jclass, jlong handle) {
+    if (handle) {
+        dia_callstate_destroy(reinterpret_cast<dia_callstate_t*>(handle));
+    }
 }
 
-static jbyteArray native_voprfUnblind(JNIEnv* env, jclass, jbyteArray element, jbyteArray blind) {
-    if (!checkLen(env, element, DIA_G1_LEN, "element")) return nullptr;
-    if (!checkLen(env, blind, DIA_FR_LEN, "blind")) return nullptr;
+static jstring native_callStateGetAkeTopic(JNIEnv* env, jclass, jlong handle) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return nullptr;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
 
-    auto E = getBytes(env, element);
-    auto R = getBytes(env, blind);
-
-    unsigned char Y[DIA_G1_LEN];
-    if (!rcIsOk(env, "dia_voprf_unblind",
-                dia_voprf_unblind(E.data(), R.data(), Y))) return nullptr;
-    return makeByteArray(env, Y, DIA_G1_LEN);
+    char* topic = nullptr;
+    if (!rcIsOk(env, "dia_callstate_get_ake_topic", dia_callstate_get_ake_topic(state, &topic))) {
+        return nullptr;
+    }
+    jstring result = env->NewStringUTF(topic);
+    dia_free_string(topic);
+    return result;
 }
 
-static jboolean native_voprfVerify(JNIEnv* env, jclass,
-                                   jbyteArray input, jbyteArray Y, jbyteArray pk) {
-    if (!checkLen(env, Y, DIA_G1_LEN, "Y")) return JNI_FALSE;
-    if (!checkLen(env, pk, DIA_G2_LEN, "pk")) return JNI_FALSE;
+static jstring native_callStateGetCurrentTopic(JNIEnv* env, jclass, jlong handle) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return nullptr;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
 
-    auto In = getBytes(env, input);
-    auto Yb = getBytes(env, Y);
-    auto Pk = getBytes(env, pk);
+    char* topic = nullptr;
+    if (!rcIsOk(env, "dia_callstate_get_current_topic", dia_callstate_get_current_topic(state, &topic))) {
+        return nullptr;
+    }
+    jstring result = env->NewStringUTF(topic);
+    dia_free_string(topic);
+    return result;
+}
 
-    int valid = 0;
-    if (!rcIsOk(env, "dia_voprf_verify",
-                dia_voprf_verify(In.data(), In.size(), Yb.data(), Pk.data(), &valid))) {
+static jbyteArray native_callStateGetSharedKey(JNIEnv* env, jclass, jlong handle) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return nullptr;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+
+    unsigned char* key = nullptr;
+    size_t keyLen = 0;
+    if (!rcIsOk(env, "dia_callstate_get_shared_key", dia_callstate_get_shared_key(state, &key, &keyLen))) {
+        return nullptr;
+    }
+    jbyteArray result = makeByteArray(env, key, keyLen);
+    dia_free_bytes(key);
+    return result;
+}
+
+static jbyteArray native_callStateGetTicket(JNIEnv* env, jclass, jlong handle) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return nullptr;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+
+    unsigned char* ticket = nullptr;
+    size_t ticketLen = 0;
+    if (!rcIsOk(env, "dia_callstate_get_ticket", dia_callstate_get_ticket(state, &ticket, &ticketLen))) {
+        return nullptr;
+    }
+    jbyteArray result = makeByteArray(env, ticket, ticketLen);
+    dia_free_bytes(ticket);
+    return result;
+}
+
+static jstring native_callStateGetSenderId(JNIEnv* env, jclass, jlong handle) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return nullptr;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+
+    char* senderId = nullptr;
+    if (!rcIsOk(env, "dia_callstate_get_sender_id", dia_callstate_get_sender_id(state, &senderId))) {
+        return nullptr;
+    }
+    jstring result = env->NewStringUTF(senderId);
+    dia_free_string(senderId);
+    return result;
+}
+
+static jboolean native_callStateIsCaller(JNIEnv*, jclass, jlong handle) {
+    if (!handle) return JNI_FALSE;
+    return dia_callstate_iam_caller(reinterpret_cast<dia_callstate_t*>(handle)) ? JNI_TRUE : JNI_FALSE;
+}
+
+static jboolean native_callStateIsRecipient(JNIEnv*, jclass, jlong handle) {
+    if (!handle) return JNI_FALSE;
+    return dia_callstate_iam_recipient(reinterpret_cast<dia_callstate_t*>(handle)) ? JNI_TRUE : JNI_FALSE;
+}
+
+static jboolean native_callStateIsRuaActive(JNIEnv*, jclass, jlong handle) {
+    if (!handle) return JNI_FALSE;
+    return dia_callstate_is_rua_active(reinterpret_cast<dia_callstate_t*>(handle)) ? JNI_TRUE : JNI_FALSE;
+}
+
+static jobjectArray native_callStateGetRemoteParty(JNIEnv* env, jclass, jlong handle) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return nullptr;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+
+    dia_remote_party_t* rp = nullptr;
+    if (!rcIsOk(env, "dia_callstate_get_remote_party", dia_callstate_get_remote_party(state, &rp))) {
+        return nullptr;
+    }
+
+    // Return as String[4]: [phone, name, logo, verified ("true"/"false")]
+    jclass strClass = env->FindClass("java/lang/String");
+    jobjectArray result = env->NewObjectArray(4, strClass, nullptr);
+    env->SetObjectArrayElement(result, 0, env->NewStringUTF(rp->phone ? rp->phone : ""));
+    env->SetObjectArrayElement(result, 1, env->NewStringUTF(rp->name ? rp->name : ""));
+    env->SetObjectArrayElement(result, 2, env->NewStringUTF(rp->logo ? rp->logo : ""));
+    env->SetObjectArrayElement(result, 3, env->NewStringUTF(rp->verified ? "true" : "false"));
+
+    dia_free_remote_party(rp);
+    return result;
+}
+
+static void native_callStateTransitionToRua(JNIEnv* env, jclass, jlong handle) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+    rcIsOk(env, "dia_callstate_transition_to_rua", dia_callstate_transition_to_rua(state));
+}
+
+/* ========================== AKE Protocol ================================== */
+
+static void native_akeInit(JNIEnv* env, jclass, jlong handle) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+    rcIsOk(env, "dia_ake_init", dia_ake_init(state));
+}
+
+static jbyteArray native_akeRequest(JNIEnv* env, jclass, jlong handle) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return nullptr;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+
+    unsigned char* out = nullptr;
+    size_t outLen = 0;
+    if (!rcIsOk(env, "dia_ake_request", dia_ake_request(state, &out, &outLen))) {
+        return nullptr;
+    }
+    jbyteArray result = makeByteArray(env, out, outLen);
+    dia_free_bytes(out);
+    return result;
+}
+
+static jbyteArray native_akeResponse(JNIEnv* env, jclass, jlong handle, jbyteArray jMsgData) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return nullptr;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+    auto msgData = getBytes(env, jMsgData);
+
+    unsigned char* out = nullptr;
+    size_t outLen = 0;
+    if (!rcIsOk(env, "dia_ake_response", dia_ake_response(state, msgData.data(), msgData.size(), &out, &outLen))) {
+        return nullptr;
+    }
+    jbyteArray result = makeByteArray(env, out, outLen);
+    dia_free_bytes(out);
+    return result;
+}
+
+static jbyteArray native_akeComplete(JNIEnv* env, jclass, jlong handle, jbyteArray jMsgData) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return nullptr;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+    auto msgData = getBytes(env, jMsgData);
+
+    unsigned char* out = nullptr;
+    size_t outLen = 0;
+    if (!rcIsOk(env, "dia_ake_complete", dia_ake_complete(state, msgData.data(), msgData.size(), &out, &outLen))) {
+        return nullptr;
+    }
+    jbyteArray result = makeByteArray(env, out, outLen);
+    dia_free_bytes(out);
+    return result;
+}
+
+static void native_akeFinalize(JNIEnv* env, jclass, jlong handle, jbyteArray jMsgData) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+    auto msgData = getBytes(env, jMsgData);
+    rcIsOk(env, "dia_ake_finalize", dia_ake_finalize(state, msgData.data(), msgData.size()));
+}
+
+/* ========================== RUA Protocol ================================== */
+
+static jstring native_ruaDeriveTopic(JNIEnv* env, jclass, jlong handle) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return nullptr;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+
+    char* topic = nullptr;
+    if (!rcIsOk(env, "dia_rua_derive_topic", dia_rua_derive_topic(state, &topic))) {
+        return nullptr;
+    }
+    jstring result = env->NewStringUTF(topic);
+    dia_free_string(topic);
+    return result;
+}
+
+static void native_ruaInit(JNIEnv* env, jclass, jlong handle) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+    rcIsOk(env, "dia_rua_init", dia_rua_init(state));
+}
+
+static jbyteArray native_ruaRequest(JNIEnv* env, jclass, jlong handle) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return nullptr;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+
+    unsigned char* out = nullptr;
+    size_t outLen = 0;
+    if (!rcIsOk(env, "dia_rua_request", dia_rua_request(state, &out, &outLen))) {
+        return nullptr;
+    }
+    jbyteArray result = makeByteArray(env, out, outLen);
+    dia_free_bytes(out);
+    return result;
+}
+
+static jbyteArray native_ruaResponse(JNIEnv* env, jclass, jlong handle, jbyteArray jMsgData) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return nullptr;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+    auto msgData = getBytes(env, jMsgData);
+
+    unsigned char* out = nullptr;
+    size_t outLen = 0;
+    if (!rcIsOk(env, "dia_rua_response", dia_rua_response(state, msgData.data(), msgData.size(), &out, &outLen))) {
+        return nullptr;
+    }
+    jbyteArray result = makeByteArray(env, out, outLen);
+    dia_free_bytes(out);
+    return result;
+}
+
+static void native_ruaFinalize(JNIEnv* env, jclass, jlong handle, jbyteArray jMsgData) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+    auto msgData = getBytes(env, jMsgData);
+    rcIsOk(env, "dia_rua_finalize", dia_rua_finalize(state, msgData.data(), msgData.size()));
+}
+
+/* ========================== Message API =================================== */
+
+static jlong native_messageDeserialize(JNIEnv* env, jclass, jbyteArray jData) {
+    auto data = getBytes(env, jData);
+    if (data.empty()) {
+        throwIllegalArg(env, "data is empty");
+        return 0;
+    }
+
+    dia_message_t* msg = nullptr;
+    if (!rcIsOk(env, "dia_message_deserialize", dia_message_deserialize(data.data(), data.size(), &msg))) {
+        return 0;
+    }
+    return reinterpret_cast<jlong>(msg);
+}
+
+static void native_messageDestroy(JNIEnv*, jclass, jlong handle) {
+    if (handle) {
+        dia_message_destroy(reinterpret_cast<dia_message_t*>(handle));
+    }
+}
+
+static jint native_messageGetType(JNIEnv*, jclass, jlong handle) {
+    if (!handle) return 0;
+    return dia_message_get_type(reinterpret_cast<dia_message_t*>(handle));
+}
+
+static jstring native_messageGetSenderId(JNIEnv* env, jclass, jlong handle) {
+    if (!handle) {
+        throwIllegalArg(env, "message handle is null");
+        return nullptr;
+    }
+    auto msg = reinterpret_cast<dia_message_t*>(handle);
+
+    char* senderId = nullptr;
+    if (!rcIsOk(env, "dia_message_get_sender_id", dia_message_get_sender_id(msg, &senderId))) {
+        return nullptr;
+    }
+    jstring result = env->NewStringUTF(senderId);
+    dia_free_string(senderId);
+    return result;
+}
+
+static jstring native_messageGetTopic(JNIEnv* env, jclass, jlong handle) {
+    if (!handle) {
+        throwIllegalArg(env, "message handle is null");
+        return nullptr;
+    }
+    auto msg = reinterpret_cast<dia_message_t*>(handle);
+
+    char* topic = nullptr;
+    if (!rcIsOk(env, "dia_message_get_topic", dia_message_get_topic(msg, &topic))) {
+        return nullptr;
+    }
+    jstring result = env->NewStringUTF(topic);
+    dia_free_string(topic);
+    return result;
+}
+
+static jbyteArray native_messageCreateBye(JNIEnv* env, jclass, jlong handle) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return nullptr;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+
+    unsigned char* out = nullptr;
+    size_t outLen = 0;
+    if (!rcIsOk(env, "dia_message_create_bye", dia_message_create_bye(state, &out, &outLen))) {
+        return nullptr;
+    }
+    jbyteArray result = makeByteArray(env, out, outLen);
+    dia_free_bytes(out);
+    return result;
+}
+
+static jbyteArray native_messageCreateHeartbeat(JNIEnv* env, jclass, jlong handle) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return nullptr;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+
+    unsigned char* out = nullptr;
+    size_t outLen = 0;
+    if (!rcIsOk(env, "dia_message_create_heartbeat", dia_message_create_heartbeat(state, &out, &outLen))) {
+        return nullptr;
+    }
+    jbyteArray result = makeByteArray(env, out, outLen);
+    dia_free_bytes(out);
+    return result;
+}
+
+/* ========================== DR Messaging ================================== */
+
+static jbyteArray native_drEncrypt(JNIEnv* env, jclass, jlong handle, jbyteArray jPlaintext) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return nullptr;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+    auto plaintext = getBytes(env, jPlaintext);
+
+    unsigned char* out = nullptr;
+    size_t outLen = 0;
+    if (!rcIsOk(env, "dia_dr_encrypt", dia_dr_encrypt(state, plaintext.data(), plaintext.size(), &out, &outLen))) {
+        return nullptr;
+    }
+    jbyteArray result = makeByteArray(env, out, outLen);
+    dia_free_bytes(out);
+    return result;
+}
+
+static jbyteArray native_drDecrypt(JNIEnv* env, jclass, jlong handle, jbyteArray jCiphertext) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return nullptr;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+    auto ciphertext = getBytes(env, jCiphertext);
+
+    unsigned char* out = nullptr;
+    size_t outLen = 0;
+    if (!rcIsOk(env, "dia_dr_decrypt", dia_dr_decrypt(state, ciphertext.data(), ciphertext.size(), &out, &outLen))) {
+        return nullptr;
+    }
+    jbyteArray result = makeByteArray(env, out, outLen);
+    dia_free_bytes(out);
+    return result;
+}
+
+/* ========================== Enrollment ==================================== */
+
+static jobjectArray native_enrollmentCreateRequest(JNIEnv* env, jclass,
+                                                   jstring jPhone, jstring jName,
+                                                   jstring jLogoUrl, jint numTickets) {
+    if (!jPhone || !jName) {
+        throwIllegalArg(env, "phone and name are required");
+        return nullptr;
+    }
+
+    const char* phone = env->GetStringUTFChars(jPhone, nullptr);
+    const char* name = env->GetStringUTFChars(jName, nullptr);
+    const char* logoUrl = jLogoUrl ? env->GetStringUTFChars(jLogoUrl, nullptr) : "";
+
+    dia_enrollment_keys_t* keys = nullptr;
+    unsigned char* request = nullptr;
+    size_t requestLen = 0;
+
+    int rc = dia_enrollment_create_request(phone, name, logoUrl, static_cast<size_t>(numTickets),
+                                           &keys, &request, &requestLen);
+
+    env->ReleaseStringUTFChars(jPhone, phone);
+    env->ReleaseStringUTFChars(jName, name);
+    if (jLogoUrl) env->ReleaseStringUTFChars(jLogoUrl, logoUrl);
+
+    if (!rcIsOk(env, "dia_enrollment_create_request", rc)) return nullptr;
+
+    // Return [[keysHandle as 8-byte long], [request bytes]]
+    jobjectArray result = make2DByteArray(env, 2);
+
+    // Store keys handle as 8 bytes (little-endian long)
+    jlong keysHandle = reinterpret_cast<jlong>(keys);
+    unsigned char handleBytes[8];
+    for (int i = 0; i < 8; i++) {
+        handleBytes[i] = static_cast<unsigned char>((keysHandle >> (i * 8)) & 0xFF);
+    }
+    set2DByteArrayElem(env, result, 0, handleBytes, 8);
+    set2DByteArrayElem(env, result, 1, request, requestLen);
+
+    dia_free_bytes(request);
+    return result;
+}
+
+static jlong native_enrollmentFinalize(JNIEnv* env, jclass,
+                                       jbyteArray jKeysHandle, jbyteArray jResponse,
+                                       jstring jPhone, jstring jName, jstring jLogoUrl) {
+    if (!jKeysHandle || !jResponse || !jPhone || !jName) {
+        throwIllegalArg(env, "keysHandle, response, phone, and name are required");
+        return 0;
+    }
+
+    // Extract keys handle from 8-byte array
+    auto handleBytes = getBytes(env, jKeysHandle);
+    if (handleBytes.size() != 8) {
+        throwIllegalArg(env, "keysHandle must be 8 bytes");
+        return 0;
+    }
+    jlong keysHandle = 0;
+    for (int i = 0; i < 8; i++) {
+        keysHandle |= (static_cast<jlong>(handleBytes[i]) << (i * 8));
+    }
+    auto keys = reinterpret_cast<dia_enrollment_keys_t*>(keysHandle);
+
+    auto response = getBytes(env, jResponse);
+    const char* phone = env->GetStringUTFChars(jPhone, nullptr);
+    const char* name = env->GetStringUTFChars(jName, nullptr);
+    const char* logoUrl = jLogoUrl ? env->GetStringUTFChars(jLogoUrl, nullptr) : "";
+
+    dia_config_t* config = nullptr;
+    int rc = dia_enrollment_finalize(keys, response.data(), response.size(),
+                                     phone, name, logoUrl, &config);
+
+    env->ReleaseStringUTFChars(jPhone, phone);
+    env->ReleaseStringUTFChars(jName, name);
+    if (jLogoUrl) env->ReleaseStringUTFChars(jLogoUrl, logoUrl);
+
+    if (!rcIsOk(env, "dia_enrollment_finalize", rc)) return 0;
+    return reinterpret_cast<jlong>(config);
+}
+
+static void native_enrollmentKeysDestroy(JNIEnv* env, jclass, jbyteArray jKeysHandle) {
+    if (!jKeysHandle) return;
+
+    auto handleBytes = getBytes(env, jKeysHandle);
+    if (handleBytes.size() != 8) return;
+
+    jlong keysHandle = 0;
+    for (int i = 0; i < 8; i++) {
+        keysHandle |= (static_cast<jlong>(handleBytes[i]) << (i * 8));
+    }
+    if (keysHandle) {
+        dia_enrollment_keys_destroy(reinterpret_cast<dia_enrollment_keys_t*>(keysHandle));
+    }
+}
+
+/* ========================== Ticket Verification =========================== */
+
+static jboolean native_verifyTicket(JNIEnv* env, jclass, jbyteArray jTicket, jbyteArray jVerifyKey) {
+    auto ticket = getBytes(env, jTicket);
+    auto verifyKey = getBytes(env, jVerifyKey);
+
+    if (ticket.empty() || verifyKey.empty()) {
+        throwIllegalArg(env, "ticket and verifyKey are required");
         return JNI_FALSE;
     }
-    return valid ? JNI_TRUE : JNI_FALSE;
-}
 
-static jboolean native_voprfVerifyBatch(JNIEnv* env, jclass,
-                                        jobjectArray inputs, jobjectArray Ys, jbyteArray pk) {
-    if (!checkLen(env, pk, DIA_G2_LEN, "pk")) return JNI_FALSE;
-
-    CArrayBytes ins = toCArrayBytes(env, inputs);
-    CArrayBytes outs = toCArrayBytes(env, Ys);
-    if (ins.ptrs.size() != outs.ptrs.size()) {
-        throwIllegalArg(env, "inputs and Ys length mismatch");
+    int result = dia_verify_ticket(ticket.data(), ticket.size(), verifyKey.data(), verifyKey.size());
+    if (result < 0) {
+        rcIsOk(env, "dia_verify_ticket", result);
         return JNI_FALSE;
     }
-    const size_t n = outs.ptrs.size();
-
-    std::vector<unsigned char> Ycat(n * DIA_G1_LEN);
-    for (size_t i = 0; i < n; ++i) {
-        if (outs.lens[i] != DIA_G1_LEN) {
-            throwIllegalArg(env, "Ys[i] wrong length");
-            return JNI_FALSE;
-        }
-        std::memcpy(Ycat.data() + i * DIA_G1_LEN, outs.ptrs[i], DIA_G1_LEN);
-    }
-
-    auto Pk = getBytes(env, pk);
-    int valid = 0;
-    if (!rcIsOk(env, "dia_voprf_verify_batch",
-                dia_voprf_verify_batch(ins.ptrs.data(), ins.lens.data(), n,
-                                       Ycat.data(), Pk.data(), &valid))) {
-        return JNI_FALSE;
-    }
-    return valid ? JNI_TRUE : JNI_FALSE;
-}
-
-/* ================================= AMF =================================== */
-
-static jobjectArray native_amfKeygen(JNIEnv* env, jclass) {
-    unsigned char sk[DIA_FR_LEN], pk[DIA_G1_LEN];
-    if (!rcIsOk(env, "dia_amf_keygen", dia_amf_keygen(sk, pk))) return nullptr;
-
-    jobjectArray out = make2DByteArray(env, 2);
-    set2DByteArrayElem(env, out, 0, sk, DIA_FR_LEN);
-    set2DByteArrayElem(env, out, 1, pk, DIA_G1_LEN);
-    return out;
-}
-
-static jbyteArray native_amfFrank(JNIEnv* env, jclass,
-                                  jbyteArray skSender, jbyteArray pkReceiver,
-                                  jbyteArray pkJudge, jbyteArray msg) {
-    if (!checkLen(env, skSender, DIA_FR_LEN, "skSender")) return nullptr;
-    if (!checkLen(env, pkReceiver, DIA_G1_LEN, "pkReceiver")) return nullptr;
-    if (!checkLen(env, pkJudge, DIA_G1_LEN, "pkJudge")) return nullptr;
-
-    auto S  = getBytes(env, skSender);
-    auto PR = getBytes(env, pkReceiver);
-    auto PJ = getBytes(env, pkJudge);
-    auto M  = getBytes(env, msg);
-
-    unsigned char* sig = nullptr;
-    size_t sig_len = 0;
-    int rc = dia_amf_frank(S.data(), PR.data(), PJ.data(),
-                           M.data(), M.size(), &sig, &sig_len);
-    if (!rcIsOk(env, "dia_amf_frank", rc)) return nullptr;
-
-    jbyteArray out = makeByteArray(env, sig, sig_len);
-    free_byte_buffer(sig);
-    return out;
-}
-
-static jboolean native_amfVerify(JNIEnv* env, jclass,
-                                 jbyteArray pkSender, jbyteArray skReceiver,
-                                 jbyteArray pkJudge, jbyteArray msg, jbyteArray sig) {
-    if (!checkLen(env, pkSender, DIA_G1_LEN, "pkSender")) return JNI_FALSE;
-    if (!checkLen(env, skReceiver, DIA_FR_LEN, "skReceiver")) return JNI_FALSE;
-    if (!checkLen(env, pkJudge, DIA_G1_LEN, "pkJudge")) return JNI_FALSE;
-
-    auto PS = getBytes(env, pkSender);
-    auto SR = getBytes(env, skReceiver);
-    auto PJ = getBytes(env, pkJudge);
-    auto M  = getBytes(env, msg);
-    auto SB = getBytes(env, sig);
-
-    int valid = 0;
-    if (!rcIsOk(env, "dia_amf_verify",
-                dia_amf_verify(PS.data(), SR.data(), PJ.data(),
-                               M.data(), M.size(), SB.data(), SB.size(), &valid))) {
-        return JNI_FALSE;
-    }
-    return valid ? JNI_TRUE : JNI_FALSE;
-}
-
-static jboolean native_amfJudge(JNIEnv* env, jclass,
-                                jbyteArray pkSender, jbyteArray pkReceiver,
-                                jbyteArray skJudge, jbyteArray msg, jbyteArray sig) {
-    if (!checkLen(env, pkSender, DIA_G1_LEN, "pkSender")) return JNI_FALSE;
-    if (!checkLen(env, pkReceiver, DIA_G1_LEN, "pkReceiver")) return JNI_FALSE;
-    if (!checkLen(env, skJudge, DIA_FR_LEN, "skJudge")) return JNI_FALSE;
-
-    auto PS = getBytes(env, pkSender);
-    auto PR = getBytes(env, pkReceiver);
-    auto SJ = getBytes(env, skJudge);
-    auto M  = getBytes(env, msg);
-    auto SB = getBytes(env, sig);
-
-    int valid = 0;
-    if (!rcIsOk(env, "dia_amf_judge",
-                dia_amf_judge(PS.data(), PR.data(), SJ.data(),
-                              M.data(), M.size(), SB.data(), SB.size(), &valid))) {
-        return JNI_FALSE;
-    }
-    return valid ? JNI_TRUE : JNI_FALSE;
-}
-
-/* ================================= BBS =================================== */
-
-static jobjectArray native_bbsKeygen(JNIEnv* env, jclass) {
-    unsigned char sk[DIA_FR_LEN], pk[DIA_G2_LEN];
-    if (!rcIsOk(env, "dia_bbs_keygen", dia_bbs_keygen(sk, pk))) return nullptr;
-
-    jobjectArray out = make2DByteArray(env, 2);
-    set2DByteArrayElem(env, out, 0, sk, DIA_FR_LEN);
-    set2DByteArrayElem(env, out, 1, pk, DIA_G2_LEN);
-    return out;
-}
-
-/* Returns opaque signature blob as byte[] */
-static jbyteArray native_bbsSign(JNIEnv* env, jclass, jobjectArray msgs, jbyteArray sk) {
-    if (!checkLen(env, sk, DIA_FR_LEN, "sk")) return nullptr;
-
-    CArrayBytes M = toCArrayBytes(env, msgs);
-    auto S = getBytes(env, sk);
-
-    unsigned char* sig_blob = nullptr;
-    size_t sig_blob_len = 0;
-
-    int rc = dia_bbs_sign(
-        (const unsigned char* const*)M.ptrs.data(),
-        M.lens.data(),
-        M.ptrs.size(),
-        S.data(),
-        &sig_blob,
-        &sig_blob_len
-    );
-    if (!rcIsOk(env, "dia_bbs_sign", rc)) return nullptr;
-
-    jbyteArray out = makeByteArray(env, sig_blob, sig_blob_len);
-    free_byte_buffer(sig_blob);
-    return out;
-}
-
-static jboolean native_bbsVerify(JNIEnv* env, jclass,
-                                 jobjectArray msgs, jbyteArray pk, jbyteArray sigBlob) {
-    if (!checkLen(env, pk, DIA_G2_LEN, "pk")) return JNI_FALSE;
-
-    CArrayBytes M = toCArrayBytes(env, msgs);
-    auto Pk  = getBytes(env, pk);
-    auto Sig = getBytes(env, sigBlob);
-
-    int valid = 0;
-    if (!rcIsOk(env, "dia_bbs_verify",
-                dia_bbs_verify(
-                    (const unsigned char* const*)M.ptrs.data(),
-                    M.lens.data(),
-                    M.ptrs.size(),
-                    Pk.data(),
-                    Sig.data(),
-                    Sig.size(),
-                    &valid))) {
-        return JNI_FALSE;
-    }
-    return valid ? JNI_TRUE : JNI_FALSE;
-}
-
-static jbyteArray native_bbsCreateProof(JNIEnv* env, jclass,
-                                        jobjectArray msgs, jintArray discloseIdx1b,
-                                        jbyteArray pk, jbyteArray sigBlob, jbyteArray nonce) {
-    if (!checkLen(env, pk, DIA_G2_LEN, "pk")) return nullptr;
-
-    CArrayBytes M = toCArrayBytes(env, msgs);
-    auto idx = toU32(env, discloseIdx1b);
-    auto Pk  = getBytes(env, pk);
-    auto Sig = getBytes(env, sigBlob);
-    auto N   = getBytes(env, nonce);
-
-    unsigned char* proof_blob = nullptr;
-    size_t proof_blob_len = 0;
-
-    int rc = dia_bbs_proof_create(
-        (const unsigned char* const*)M.ptrs.data(),
-        M.lens.data(),
-        M.ptrs.size(),
-        idx.empty() ? nullptr : idx.data(),
-        idx.size(),
-        Pk.data(),
-        Sig.data(),
-        Sig.size(),
-        N.data(), N.size(),
-        &proof_blob, &proof_blob_len
-    );
-    if (!rcIsOk(env, "dia_bbs_proof_create", rc)) return nullptr;
-
-    jbyteArray out = makeByteArray(env, proof_blob, proof_blob_len);
-    free_byte_buffer(proof_blob);
-    return out;
-}
-
-static jboolean native_bbsVerifyProof(JNIEnv* env, jclass,
-                                      jintArray disclosedIdx1b, jobjectArray disclosedMsgs,
-                                      jbyteArray pk, jbyteArray nonce, jbyteArray proof) {
-    if (!checkLen(env, pk, DIA_G2_LEN, "pk")) return JNI_FALSE;
-
-    auto idx = toU32(env, disclosedIdx1b);
-    CArrayBytes D = toCArrayBytes(env, disclosedMsgs);
-    if (D.ptrs.size() != idx.size()) {
-        throwIllegalArg(env, "disclosedIdx and disclosedMsgs length mismatch");
-        return JNI_FALSE;
-    }
-
-    auto Pk = getBytes(env, pk);
-    auto N  = getBytes(env, nonce);
-    auto Pr = getBytes(env, proof);
-
-    int valid = 0;
-    if (!rcIsOk(env, "dia_bbs_proof_verify",
-                dia_bbs_proof_verify(
-                    idx.empty() ? nullptr : idx.data(),
-                    (const unsigned char* const*)D.ptrs.data(),
-                    D.lens.data(),
-                    D.ptrs.size(),
-                    Pk.data(),
-                    N.data(), N.size(),
-                    Pr.data(), Pr.size(),
-                    &valid))) {
-        return JNI_FALSE;
-    }
-    return valid ? JNI_TRUE : JNI_FALSE;
+    return result == 1 ? JNI_TRUE : JNI_FALSE;
 }
 
 /* ============================ Registration =============================== */
 
 static JNINativeMethod gMethods[] = {
-    // DH
-    { "dhKeygen",         "()[[B",                          (void*)native_dhKeygen },
-    { "dhComputeSecret",  "([B[B)[B",                       (void*)native_dhComputeSecret },
+    // Config
+    { "configFromEnv",    "(Ljava/lang/String;)J",          (void*)native_configFromEnv },
+    { "configToEnv",      "(J)Ljava/lang/String;",          (void*)native_configToEnv },
+    { "configDestroy",    "(J)V",                           (void*)native_configDestroy },
 
-    // VOPRF
-    { "voprfKeygen",      "()[[B",                          (void*)native_voprfKeygen },
-    { "voprfBlind",       "([B)[[B",                        (void*)native_voprfBlind },
-    { "voprfEvaluate",    "([B[B)[B",                       (void*)native_voprfEvaluate },
-    { "voprfUnblind",     "([B[B)[B",                       (void*)native_voprfUnblind },
-    { "voprfVerify",      "([B[B[B)Z",                      (void*)native_voprfVerify },
-    { "voprfVerifyBatch", "([[B[[B[B)Z",                    (void*)native_voprfVerifyBatch },
+    // CallState
+    { "callStateCreate",           "(JLjava/lang/String;Z)J",  (void*)native_callStateCreate },
+    { "callStateDestroy",          "(J)V",                     (void*)native_callStateDestroy },
+    { "callStateGetAkeTopic",      "(J)Ljava/lang/String;",    (void*)native_callStateGetAkeTopic },
+    { "callStateGetCurrentTopic",  "(J)Ljava/lang/String;",    (void*)native_callStateGetCurrentTopic },
+    { "callStateGetSharedKey",     "(J)[B",                    (void*)native_callStateGetSharedKey },
+    { "callStateGetTicket",        "(J)[B",                    (void*)native_callStateGetTicket },
+    { "callStateGetSenderId",      "(J)Ljava/lang/String;",    (void*)native_callStateGetSenderId },
+    { "callStateIsCaller",         "(J)Z",                     (void*)native_callStateIsCaller },
+    { "callStateIsRecipient",      "(J)Z",                     (void*)native_callStateIsRecipient },
+    { "callStateIsRuaActive",      "(J)Z",                     (void*)native_callStateIsRuaActive },
+    { "callStateGetRemoteParty",   "(J)[Ljava/lang/String;",   (void*)native_callStateGetRemoteParty },
+    { "callStateTransitionToRua",  "(J)V",                     (void*)native_callStateTransitionToRua },
 
-    // AMF
-    { "amfKeygen",        "()[[B",                          (void*)native_amfKeygen },
-    { "amfFrank",         "([B[B[B[B)[B",                   (void*)native_amfFrank },
-    { "amfVerify",        "([B[B[B[B[B)Z",                  (void*)native_amfVerify },
-    { "amfJudge",         "([B[B[B[B[B)Z",                  (void*)native_amfJudge },
+    // AKE Protocol
+    { "akeInit",       "(J)V",                              (void*)native_akeInit },
+    { "akeRequest",    "(J)[B",                             (void*)native_akeRequest },
+    { "akeResponse",   "(J[B)[B",                           (void*)native_akeResponse },
+    { "akeComplete",   "(J[B)[B",                           (void*)native_akeComplete },
+    { "akeFinalize",   "(J[B)V",                            (void*)native_akeFinalize },
 
-    // BBS (updated to opaque blobs)
-    { "bbsKeygen",        "()[[B",                          (void*)native_bbsKeygen },
-    { "bbsSign",          "([[B[B)[B",                      (void*)native_bbsSign },          // returns blob
-    { "bbsVerify",        "([[B[B[B)Z",                     (void*)native_bbsVerify },        // uses blob
-    { "bbsCreateProof",   "([[B[I[B[B[B)[B",                (void*)native_bbsCreateProof },   // uses blob
-    { "bbsVerifyProof",   "([I[[B[B[B[B)Z",                 (void*)native_bbsVerifyProof },
+    // RUA Protocol
+    { "ruaDeriveTopic", "(J)Ljava/lang/String;",            (void*)native_ruaDeriveTopic },
+    { "ruaInit",        "(J)V",                             (void*)native_ruaInit },
+    { "ruaRequest",     "(J)[B",                            (void*)native_ruaRequest },
+    { "ruaResponse",    "(J[B)[B",                          (void*)native_ruaResponse },
+    { "ruaFinalize",    "(J[B)V",                           (void*)native_ruaFinalize },
+
+    // Messages
+    { "messageDeserialize",   "([B)J",                      (void*)native_messageDeserialize },
+    { "messageDestroy",       "(J)V",                       (void*)native_messageDestroy },
+    { "messageGetType",       "(J)I",                       (void*)native_messageGetType },
+    { "messageGetSenderId",   "(J)Ljava/lang/String;",      (void*)native_messageGetSenderId },
+    { "messageGetTopic",      "(J)Ljava/lang/String;",      (void*)native_messageGetTopic },
+    { "messageCreateBye",     "(J)[B",                      (void*)native_messageCreateBye },
+    { "messageCreateHeartbeat", "(J)[B",                    (void*)native_messageCreateHeartbeat },
+
+    // DR Messaging
+    { "drEncrypt",     "(J[B)[B",                           (void*)native_drEncrypt },
+    { "drDecrypt",     "(J[B)[B",                           (void*)native_drDecrypt },
+
+    // Enrollment
+    { "enrollmentCreateRequest",    "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)[[B", (void*)native_enrollmentCreateRequest },
+    { "enrollmentFinalize",         "([B[BLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)J", (void*)native_enrollmentFinalize },
+    { "enrollmentKeysDestroy",      "([B)V",                (void*)native_enrollmentKeysDestroy },
+
+    // Ticket verification
+    { "verifyTicket",  "([B[B)Z",                           (void*)native_verifyTicket },
 };
 
 jint JNI_OnLoad(JavaVM* vm, void*) {
