@@ -159,22 +159,33 @@ if(NOT SODIUM_FOUND_SYSTEM)
         endif()
       endif()
       
+      # Detect the host system for NDK prebuilt directory
+      if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+        set(ANDROID_HOST_TAG "linux-x86_64")
+      elseif(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
+        set(ANDROID_HOST_TAG "darwin-x86_64")
+      elseif(CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
+        set(ANDROID_HOST_TAG "windows-x86_64")
+      else()
+        message(FATAL_ERROR "Unsupported host system: ${CMAKE_HOST_SYSTEM_NAME}")
+      endif()
+      
       # Extract API level from ANDROID_PLATFORM (e.g., "android-24" -> "24")
       string(REGEX REPLACE "android-" "" ANDROID_API_LEVEL "${ANDROID_PLATFORM}")
       
       find_program(SODIUM_CC 
         NAMES ${SODIUM_COMPILER_PREFIX}${ANDROID_API_LEVEL}-clang
-        PATHS ${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin
+        PATHS ${ANDROID_NDK}/toolchains/llvm/prebuilt/${ANDROID_HOST_TAG}/bin
         NO_DEFAULT_PATH
       )
       find_program(SODIUM_AR 
         NAMES llvm-ar
-        PATHS ${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin
+        PATHS ${ANDROID_NDK}/toolchains/llvm/prebuilt/${ANDROID_HOST_TAG}/bin
         NO_DEFAULT_PATH
       )
       find_program(SODIUM_RANLIB 
         NAMES llvm-ranlib
-        PATHS ${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin
+        PATHS ${ANDROID_NDK}/toolchains/llvm/prebuilt/${ANDROID_HOST_TAG}/bin
         NO_DEFAULT_PATH
       )
       

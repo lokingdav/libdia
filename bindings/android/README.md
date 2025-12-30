@@ -8,10 +8,30 @@ Android JNI bindings for the libdia cryptographic protocol library.
 
 - Android NDK r26+ 
 - CMake 3.22+
+- Supported host platforms: Linux, macOS, Windows
 
-Set NDK path:
+Set NDK path using one of these environment variables (the build script checks all three):
 ```bash
-export ANDROID_NDK_ROOT=$HOME/Android/Sdk/ndk/27.2.12479018
+# Option 1: ANDROID_NDK (preferred)
+export ANDROID_NDK=/path/to/android-ndk
+
+# Option 2: ANDROID_NDK_ROOT (Android Studio default)
+export ANDROID_NDK_ROOT=/path/to/android-ndk
+
+# Option 3: ANDROID_NDK_HOME (legacy)
+export ANDROID_NDK_HOME=/path/to/android-ndk
+```
+
+Common NDK locations:
+```bash
+# Android Studio (Linux/macOS)
+export ANDROID_NDK=$HOME/Android/Sdk/ndk/<version>
+
+# Android Studio (Windows)
+export ANDROID_NDK=$LOCALAPPDATA/Android/Sdk/ndk/<version>
+
+# Standalone NDK
+export ANDROID_NDK=$HOME/android-ndk
 ```
 
 ### Build Native Libraries
@@ -19,11 +39,11 @@ export ANDROID_NDK_ROOT=$HOME/Android/Sdk/ndk/27.2.12479018
 ```bash
 cd bindings/android
 ./build.sh                 # Build for arm64-v8a (default)
-./build.sh x86_64         # Build for x86_64 emulator
-./build.sh --all          # Build for all ABIs
 ./build.sh --clean arm64-v8a  # Clean build
 ./build.sh --help         # Show all options
 ```
+
+**Note:** Currently only `arm64-v8a` (64-bit ARM) is fully tested and supported. Other ABIs (x86_64, armeabi-v7a) may have issues with the MCL cryptographic library's assembly optimizations.
 
 Libraries are staged in `builds/<ABI>/jniLibs/<ABI>/`:
 - `libdia_jni.so` - JNI bindings
