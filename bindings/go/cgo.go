@@ -46,6 +46,8 @@ const (
 	MsgRUAResponse = C.DIA_MSG_RUA_RESPONSE
 	MsgHeartbeat   = C.DIA_MSG_HEARTBEAT
 	MsgBye         = C.DIA_MSG_BYE
+	MsgODARequest  = C.DIA_MSG_ODA_REQUEST
+	MsgODAResponse = C.DIA_MSG_ODA_RESPONSE
 )
 
 // one-time init of the underlying library
@@ -134,6 +136,21 @@ type RemoteParty struct {
 	Name     string
 	Logo     string
 	Verified bool
+}
+
+// ============================================================================
+// OdaVerification - Result of an ODA verification
+// ============================================================================
+
+// OdaVerification contains the result of an On-Demand Authentication verification.
+type OdaVerification struct {
+	Timestamp           string
+	Verified            bool
+	Issuer              string
+	CredentialType      string
+	IssuanceDate        string
+	ExpirationDate      string
+	DisclosedAttributes map[string]string
 }
 
 // ============================================================================
@@ -441,6 +458,145 @@ func (cs *CallState) RUAFinalize(response []byte) error {
 	}
 	return rcErr(C.dia_rua_finalize(cs.handle,
 		(*C.uchar)(&response[0]), C.size_t(len(response))))
+}
+
+// ============================================================================
+// ODA Protocol (On-Demand Authentication)
+// ============================================================================
+
+// ODARequest creates an ODA request for the specified attributes.
+// This should be called by the verifier (party requesting authentication).
+// Returns encrypted ODA request message.
+func (cs *CallState) ODARequest(attributes []string) ([]byte, error) {
+	if cs == nil || cs.handle == nil || len(attributes) == 0 {
+		return nil, ErrInvalidArg
+	}
+
+	// Convert Go string slice to C array of strings
+	cAttrs := make([]*C.char, len(attributes)+1)
+	for i, attr := range attributes {
+		cAttrs[i] = C.CString(attr)
+		defer C.free(unsafe.Pointer(cAttrs[i]))
+	}
+	cAttrs[len(attributes)] = nil // NULL-terminate
+
+	var out *C.uchar
+	var outLen C.size_t
+	rc := C.dia_oda_request(cs.handle, &cAttrs[0], &out, &outLen)
+	if err := rcErr(rc); err != nil {
+		return nil, err
+	}
+	defer C.dia_free_bytes(out)
+	return C.GoBytes(unsafe.Pointer(out), C.int(outLen)), nil
+}
+
+// ODAResponse processes an ODA request and creates a response with presentation.
+// This should be called by the prover (party being authenticated).
+// Returns encrypted ODA response message.
+func (cs *CallState) ODAResponse(request []byte) ([]byte, error) {
+	if cs == nil || cs.handle == nil || len(request) == 0 {
+		return nil, ErrInvalidArg
+	}
+
+	var out *C.uchar
+	var outLen C.size_t
+	rc := C.dia_oda_response(cs.handle,
+		(*C.uchar)(&request[0]), C.size_t(len(request)),
+		&out, &outLen)
+	if err := rcErr(rc); err != nil {
+		return nil, err
+	}
+	defer C.dia_free_bytes(out)
+	return C.GoBytes(unsafe.Pointer(out), C.int(outLen)), nil
+}
+
+// ODAVerify verifies an ODA response and returns the verification result.
+// This should be called by the verifier after receiving the prover's response.
+func (cs *CallState) ODAVerify(response []byte) (*OdaVerification, error) {
+	if cs == nil || cs.handle == nil || len(response) == 0 {
+		return nil, ErrInvalidArg
+	}
+
+	var result *C.dia_oda_verification_t
+	rc := C.dia_oda_verify(cs.handle,
+		(*C.uchar)(&response[0]), C.size_t(len(response)),
+		&result)
+	if err := rcErr(rc); err != nil {
+		return nil, err
+	}
+	defer C.dia_free_oda_verification(result)
+
+	// Convert C struct to Go struct
+	verification := &OdaVerification{
+		Timestamp:           C.GoString(result.timestamp),
+		Verified:            result.verified != 0,
+		Issuer:              C.GoString(result.issuer),
+		CredentialType:      C.GoString(result.credential_type),
+		IssuanceDate:        C.GoString(result.issuance_date),
+		ExpirationDate:      C.GoString(result.expiration_date),
+		DisclosedAttributes: make(map[string]string),
+	}
+
+	// Convert parallel NULL-terminated arrays to map
+	if result.attribute_names != nil && result.attribute_values != nil {
+		// Get pointer to first element of each array
+		namesSlice := (*[1 << 30]*C.char)(unsafe.Pointer(result.attribute_names))
+		valuesSlice := (*[1 << 30]*C.char)(unsafe.Pointer(result.attribute_values))
+
+		for i := 0; namesSlice[i] != nil && valuesSlice[i] != nil; i++ {
+			name := C.GoString(namesSlice[i])
+			value := C.GoString(valuesSlice[i])
+			verification.DisclosedAttributes[name] = value
+		}
+	}
+
+	return verification, nil
+}
+
+// ODAGetVerificationCount returns the number of ODA verifications performed.
+func (cs *CallState) ODAGetVerificationCount() int {
+	if cs == nil || cs.handle == nil {
+		return 0
+	}
+	return int(C.dia_oda_get_verification_count(cs.handle))
+}
+
+// ODAGetVerification retrieves a specific ODA verification by index.
+func (cs *CallState) ODAGetVerification(index int) (*OdaVerification, error) {
+	if cs == nil || cs.handle == nil {
+		return nil, ErrInvalidArg
+	}
+
+	var result *C.dia_oda_verification_t
+	rc := C.dia_oda_get_verification(cs.handle, C.size_t(index), &result)
+	if err := rcErr(rc); err != nil {
+		return nil, err
+	}
+	defer C.dia_free_oda_verification(result)
+
+	verification := &OdaVerification{
+		Timestamp:           C.GoString(result.timestamp),
+		Verified:            result.verified != 0,
+		Issuer:              C.GoString(result.issuer),
+		CredentialType:      C.GoString(result.credential_type),
+		IssuanceDate:        C.GoString(result.issuance_date),
+		ExpirationDate:      C.GoString(result.expiration_date),
+		DisclosedAttributes: make(map[string]string),
+	}
+
+	// Convert parallel NULL-terminated arrays to map
+	if result.attribute_names != nil && result.attribute_values != nil {
+		namesSlice := (*[1 << 30]*C.char)(unsafe.Pointer(result.attribute_names))
+		valuesSlice := (*[1 << 30]*C.char)(unsafe.Pointer(result.attribute_values))
+
+		for i := 0; namesSlice[i] != nil && valuesSlice[i] != nil; i++ {
+			name := C.GoString(namesSlice[i])
+			value := C.GoString(valuesSlice[i])
+			verification.DisclosedAttributes[name] = value
+		}
+	}
+
+	return verification, nil
 }
 
 // ============================================================================

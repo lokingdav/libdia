@@ -359,6 +359,221 @@ func TestRUA_AfterAKE(t *testing.T) {
 }
 
 // ============================================================================
+// ODA Protocol Tests
+// ============================================================================
+
+func TestODA_Complete_Flow(t *testing.T) {
+	// Setup with full AKE + RUA
+	aliceCfg := createTestConfig(t, "+1111111111", "Alice")
+	defer aliceCfg.Close()
+	bobCfg := createTestConfig(t, "+2222222222", "Bob")
+	defer bobCfg.Close()
+
+	alice, _ := NewCallState(aliceCfg, "+2222222222", true)
+	defer alice.Close()
+	bob, _ := NewCallState(bobCfg, "+1111111111", false)
+	defer bob.Close()
+
+	// Complete AKE
+	alice.AKEInit()
+	bob.AKEInit()
+	akeReq, _ := alice.AKERequest()
+	akeResp, _ := bob.AKEResponse(akeReq)
+	akeComp, _ := alice.AKEComplete(akeResp)
+	bob.AKEFinalize(akeComp)
+
+	// Complete RUA
+	alice.TransitionToRUA()
+	bob.TransitionToRUA()
+	alice.RUAInit()
+	bob.RUAInit()
+	ruaReq, _ := alice.RUARequest()
+	ruaResp, _ := bob.RUAResponse(ruaReq)
+	alice.RUAFinalize(ruaResp)
+
+	// Alice verifies Bob with ODA
+	attrs := []string{"age_over_21", "nationality"}
+
+	// Alice creates ODA request
+	odaReq, err := alice.ODARequest(attrs)
+	if err != nil {
+		t.Fatalf("ODARequest: %v", err)
+	}
+	if len(odaReq) == 0 {
+		t.Fatal("ODA request should not be empty")
+	}
+
+	// Bob receives and responds
+	odaResp, err := bob.ODAResponse(odaReq)
+	if err != nil {
+		t.Fatalf("ODAResponse: %v", err)
+	}
+	if len(odaResp) == 0 {
+		t.Fatal("ODA response should not be empty")
+	}
+
+	// Alice verifies the presentation
+	verification, err := alice.ODAVerify(odaResp)
+	if err != nil {
+		t.Fatalf("ODAVerify: %v", err)
+	}
+
+	if !verification.Verified {
+		t.Error("Verification should succeed")
+	}
+	if verification.Issuer != "MockIssuer" {
+		t.Errorf("Issuer = %q, want MockIssuer", verification.Issuer)
+	}
+	if verification.CredentialType != "VerifiableCredential" {
+		t.Errorf("CredentialType = %q, want VerifiableCredential", verification.CredentialType)
+	}
+	if len(verification.DisclosedAttributes) == 0 {
+		t.Error("Should have disclosed attributes")
+	}
+	if val, ok := verification.DisclosedAttributes["age_over_21"]; !ok || val != "true" {
+		t.Errorf("age_over_21 = %q, want true", val)
+	}
+	if val, ok := verification.DisclosedAttributes["nationality"]; !ok || val != "US" {
+		t.Errorf("nationality = %q, want US", val)
+	}
+
+	// Check verification was stored
+	count := alice.ODAGetVerificationCount()
+	if count != 1 {
+		t.Errorf("Verification count = %d, want 1", count)
+	}
+
+	// Retrieve stored verification
+	stored, err := alice.ODAGetVerification(0)
+	if err != nil {
+		t.Fatalf("ODAGetVerification: %v", err)
+	}
+	if !stored.Verified {
+		t.Error("Stored verification should be verified")
+	}
+	if stored.Issuer != "MockIssuer" {
+		t.Errorf("Stored issuer = %q, want MockIssuer", stored.Issuer)
+	}
+}
+
+func TestODA_Bidirectional(t *testing.T) {
+	// Setup
+	aliceCfg := createTestConfig(t, "+1111111111", "Alice")
+	defer aliceCfg.Close()
+	bobCfg := createTestConfig(t, "+2222222222", "Bob")
+	defer bobCfg.Close()
+
+	alice, _ := NewCallState(aliceCfg, "+2222222222", true)
+	defer alice.Close()
+	bob, _ := NewCallState(bobCfg, "+1111111111", false)
+	defer bob.Close()
+
+	// Complete AKE + RUA
+	alice.AKEInit()
+	bob.AKEInit()
+	akeReq, _ := alice.AKERequest()
+	akeResp, _ := bob.AKEResponse(akeReq)
+	akeComp, _ := alice.AKEComplete(akeResp)
+	bob.AKEFinalize(akeComp)
+	alice.TransitionToRUA()
+	bob.TransitionToRUA()
+	alice.RUAInit()
+	bob.RUAInit()
+	ruaReq, _ := alice.RUARequest()
+	ruaResp, _ := bob.RUAResponse(ruaReq)
+	alice.RUAFinalize(ruaResp)
+
+	// Bob verifies Alice (reverse direction)
+	attrs := []string{"name", "driver_license_number"}
+
+	odaReq, err := bob.ODARequest(attrs)
+	if err != nil {
+		t.Fatalf("Bob ODARequest: %v", err)
+	}
+
+	odaResp, err := alice.ODAResponse(odaReq)
+	if err != nil {
+		t.Fatalf("Alice ODAResponse: %v", err)
+	}
+
+	verification, err := bob.ODAVerify(odaResp)
+	if err != nil {
+		t.Fatalf("Bob ODAVerify: %v", err)
+	}
+
+	if !verification.Verified {
+		t.Error("Bob's verification should succeed")
+	}
+	if val := verification.DisclosedAttributes["name"]; val != "John Doe" {
+		t.Errorf("name = %q, want John Doe", val)
+	}
+	if val := verification.DisclosedAttributes["driver_license_number"]; val != "D1234567" {
+		t.Errorf("driver_license_number = %q, want D1234567", val)
+	}
+}
+
+func TestODA_Multiple_Rounds(t *testing.T) {
+	// Setup
+	aliceCfg := createTestConfig(t, "+1111111111", "Alice")
+	defer aliceCfg.Close()
+	bobCfg := createTestConfig(t, "+2222222222", "Bob")
+	defer bobCfg.Close()
+
+	alice, _ := NewCallState(aliceCfg, "+2222222222", true)
+	defer alice.Close()
+	bob, _ := NewCallState(bobCfg, "+1111111111", false)
+	defer bob.Close()
+
+	// Complete AKE + RUA
+	alice.AKEInit()
+	bob.AKEInit()
+	akeReq, _ := alice.AKERequest()
+	akeResp, _ := bob.AKEResponse(akeReq)
+	akeComp, _ := alice.AKEComplete(akeResp)
+	bob.AKEFinalize(akeComp)
+	alice.TransitionToRUA()
+	bob.TransitionToRUA()
+	alice.RUAInit()
+	bob.RUAInit()
+	ruaReq, _ := alice.RUARequest()
+	ruaResp, _ := bob.RUAResponse(ruaReq)
+	alice.RUAFinalize(ruaResp)
+
+	// Multiple ODA rounds
+	rounds := [][]string{
+		{"age_over_18"},
+		{"nationality", "birth_date"},
+		{"name"},
+	}
+
+	for i, attrs := range rounds {
+		req, _ := alice.ODARequest(attrs)
+		resp, _ := bob.ODAResponse(req)
+		_, err := alice.ODAVerify(resp)
+		if err != nil {
+			t.Fatalf("Round %d ODAVerify: %v", i+1, err)
+		}
+	}
+
+	// Check all verifications stored
+	count := alice.ODAGetVerificationCount()
+	if count != 3 {
+		t.Errorf("Verification count = %d, want 3", count)
+	}
+
+	// Verify each stored verification
+	for i := 0; i < 3; i++ {
+		v, err := alice.ODAGetVerification(i)
+		if err != nil {
+			t.Fatalf("Get verification %d: %v", i, err)
+		}
+		if !v.Verified {
+			t.Errorf("Verification %d should be verified", i)
+		}
+	}
+}
+
+// ============================================================================
 // DR Messaging Tests
 // ============================================================================
 
