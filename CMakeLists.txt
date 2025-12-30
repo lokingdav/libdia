@@ -130,20 +130,63 @@ if(NOT SODIUM_FOUND_SYSTEM)
       # Determine the host triple for Android
       if(ANDROID_ABI STREQUAL "arm64-v8a")
         set(SODIUM_HOST "aarch64-linux-android")
+        set(SODIUM_COMPILER_PREFIX "aarch64-linux-android")
       elseif(ANDROID_ABI STREQUAL "armeabi-v7a")
         set(SODIUM_HOST "armv7a-linux-androideabi")
+        set(SODIUM_COMPILER_PREFIX "armv7a-linux-androideabi")
       elseif(ANDROID_ABI STREQUAL "x86_64")
         set(SODIUM_HOST "x86_64-linux-android")
+        set(SODIUM_COMPILER_PREFIX "x86_64-linux-android")
       elseif(ANDROID_ABI STREQUAL "x86")
         set(SODIUM_HOST "i686-linux-android")
+        set(SODIUM_COMPILER_PREFIX "i686-linux-android")
       else()
         message(FATAL_ERROR "Unsupported Android ABI: ${ANDROID_ABI}")
       endif()
       
       # Set up Android NDK environment variables
-      set(SODIUM_CC "${CMAKE_C_COMPILER}")
-      set(SODIUM_AR "${CMAKE_AR}")
-      set(SODIUM_RANLIB "${CMAKE_RANLIB}")
+      # Use the NDK's target-specific compiler wrappers
+      # Find ANDROID_NDK path (can be ANDROID_NDK, ANDROID_NDK_ROOT, or ANDROID_NDK_HOME)
+      if(NOT ANDROID_NDK)
+        if(DEFINED ENV{ANDROID_NDK})
+          set(ANDROID_NDK $ENV{ANDROID_NDK})
+        elseif(DEFINED ENV{ANDROID_NDK_ROOT})
+          set(ANDROID_NDK $ENV{ANDROID_NDK_ROOT})
+        elseif(DEFINED ENV{ANDROID_NDK_HOME})
+          set(ANDROID_NDK $ENV{ANDROID_NDK_HOME})
+        else()
+          message(FATAL_ERROR "ANDROID_NDK not found. Set ANDROID_NDK, ANDROID_NDK_ROOT, or ANDROID_NDK_HOME")
+        endif()
+      endif()
+      
+      # Extract API level from ANDROID_PLATFORM (e.g., "android-24" -> "24")
+      string(REGEX REPLACE "android-" "" ANDROID_API_LEVEL "${ANDROID_PLATFORM}")
+      
+      find_program(SODIUM_CC 
+        NAMES ${SODIUM_COMPILER_PREFIX}${ANDROID_API_LEVEL}-clang
+        PATHS ${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin
+        NO_DEFAULT_PATH
+      )
+      find_program(SODIUM_AR 
+        NAMES llvm-ar
+        PATHS ${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin
+        NO_DEFAULT_PATH
+      )
+      find_program(SODIUM_RANLIB 
+        NAMES llvm-ranlib
+        PATHS ${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin
+        NO_DEFAULT_PATH
+      )
+      
+      if(NOT SODIUM_CC)
+        message(FATAL_ERROR "Could not find Android C compiler for ${ANDROID_ABI}")
+      endif()
+      
+      message(STATUS "libsodium Android build:")
+      message(STATUS "  CC: ${SODIUM_CC}")
+      message(STATUS "  AR: ${SODIUM_AR}")
+      message(STATUS "  RANLIB: ${SODIUM_RANLIB}")
+      message(STATUS "  HOST: ${SODIUM_HOST}")
       
       set(SODIUM_INSTALL_DIR ${SODIUM_BINARY_DIR}/install)
       file(MAKE_DIRECTORY ${SODIUM_INSTALL_DIR})

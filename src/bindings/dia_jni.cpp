@@ -717,7 +717,7 @@ jint JNI_OnLoad(JavaVM* vm, void*) {
         return JNI_ERR;
     }
     // ensure the crypto backend is initialized once
-    init_dia();
+    dia_init();
 
     jclass cls = env->FindClass(DIA_JNI_CLASS);
     if (!cls) {

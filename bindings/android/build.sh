@@ -25,6 +25,9 @@
 
 set -euo pipefail
 
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Supported ABIs
 AllowedABIs=(arm64-v8a x86_64 armeabi-v7a)
 
@@ -143,7 +146,11 @@ fi
 # Build function
 build_abi() {
     local abi="$1"
-    local build_dir="bindings/android/builds/$abi"
+    
+    # Get absolute path to repo root (4 levels up from this script)
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local repo_root="$(cd "$script_dir/../.." && pwd)"
+    local build_dir="$script_dir/builds/$abi"
     
     info "Building for ABI: $abi"
     
@@ -167,6 +174,7 @@ build_abi() {
         "-DBUILD_DIA_TESTING=OFF"
         "-DBUILD_DIA_BENCHMARK=OFF"
         "-DMCL_TEST_WITH_GMP=OFF"
+        "-DFORCE_BUNDLED_SODIUM=ON"
     )
     
     if [[ $VERBOSE -eq 1 ]]; then
@@ -175,9 +183,9 @@ build_abi() {
     
     info "Configuring CMake..."
     if [[ $VERBOSE -eq 1 ]]; then
-        cmake "${cmake_args[@]}" ../../../..
+        cmake "${cmake_args[@]}" "$repo_root"
     else
-        cmake "${cmake_args[@]}" ../../../.. > /dev/null
+        cmake "${cmake_args[@]}" "$repo_root" > /dev/null
     fi
     
     # Build
@@ -232,8 +240,8 @@ build_abi() {
         "./libmcl.so" \
         "src/libmcl.so" && ((copied++)) || true
     
-    # Return to repo root
-    cd - > /dev/null
+    # Return to original directory
+    cd "$OLDPWD" > /dev/null || cd "$repo_root"
     
     if [[ $copied -eq 2 ]]; then
         success "Build completed for $abi ($copied libraries staged)"
@@ -272,7 +280,7 @@ else
     success "Build completed successfully!"
     echo ""
     info "Staged libraries:"
-    local stage_dir="bindings/android/builds/$ABI/jniLibs/$ABI"
+    stage_dir="$SCRIPT_DIR/builds/$ABI/jniLibs/$ABI"
     if [[ -d "$stage_dir" ]]; then
         ls -lh "$stage_dir" | tail -n +2 | awk '{print "  " $9 " (" $5 ")"}'
     fi
