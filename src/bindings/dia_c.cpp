@@ -847,10 +847,10 @@ int dia_oda_response(dia_callstate_t* state,
     if (!state || !msg_data || !out || !out_len) return DIA_ERR_INVALID_ARG;
     
     try {
-        // Decrypt and deserialize message
-        Bytes ciphertext(msg_data, msg_data + msg_len);
-        Bytes plaintext = state->state->dr_session->decrypt(ciphertext);
-        ProtocolMessage request_msg = ProtocolMessage::deserialize(plaintext);
+        // Deserialize the (plaintext) ProtocolMessage. The ODA payload inside the
+        // message is Double-Ratchet encrypted and will be decrypted by the protocol.
+        Bytes msg_bytes(msg_data, msg_data + msg_len);
+        ProtocolMessage request_msg = ProtocolMessage::deserialize(msg_bytes);
         
         // Create ODA response
         Bytes result = oda_response(*state->state, request_msg);
@@ -868,10 +868,10 @@ int dia_oda_verify(dia_callstate_t* state,
     if (!state || !msg_data || !result) return DIA_ERR_INVALID_ARG;
     
     try {
-        // Decrypt and deserialize message
-        Bytes ciphertext(msg_data, msg_data + msg_len);
-        Bytes plaintext = state->state->dr_session->decrypt(ciphertext);
-        ProtocolMessage response_msg = ProtocolMessage::deserialize(plaintext);
+        // Deserialize the (plaintext) ProtocolMessage. The ODA payload inside the
+        // message is Double-Ratchet encrypted and will be decrypted by the protocol.
+        Bytes msg_bytes(msg_data, msg_data + msg_len);
+        ProtocolMessage response_msg = ProtocolMessage::deserialize(msg_bytes);
         
         // Verify presentation
         auto verification = oda_verify(*state->state, response_msg);

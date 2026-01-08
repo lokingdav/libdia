@@ -22,6 +22,37 @@ static std::string get_timestamp() {
 }
 
 // -----------------------------------------------------------------------------
+// DR Message helpers for ODA (match RUA style)
+// -----------------------------------------------------------------------------
+
+static Bytes create_dr_oda_message(
+    const std::string& sender_id,
+    const std::string& topic,
+    MessageType msg_type,
+    const OdaMessage& payload,
+    doubleratchet::DrSession& dr_session)
+{
+    Bytes payload_bytes = payload.serialize();
+    Bytes encrypted = dr_session.encrypt(payload_bytes);
+
+    ProtocolMessage msg;
+    msg.type = msg_type;
+    msg.sender_id = sender_id;
+    msg.topic = topic;
+    msg.payload = encrypted;
+
+    return msg.serialize();
+}
+
+static OdaMessage decode_dr_oda_payload(
+    const ProtocolMessage& msg,
+    doubleratchet::DrSession& dr_session)
+{
+    Bytes decrypted = dr_session.decrypt(msg.payload);
+    return OdaMessage::deserialize(decrypted);
+}
+
+// -----------------------------------------------------------------------------
 // ODA Request - Verifier creates request
 // -----------------------------------------------------------------------------
 
@@ -46,19 +77,14 @@ Bytes oda_request(CallState& verifier, const std::vector<std::string>& requested
     
     // Store pending request for later verification
     verifier.pending_oda_request = oda_msg;
-    
-    // Create protocol message
-    ProtocolMessage proto_msg;
-    proto_msg.type = MessageType::OdaRequest;
-    proto_msg.sender_id = verifier.sender_id;
-    proto_msg.topic = verifier.get_current_topic();
-    proto_msg.payload = oda_msg.serialize();
-    
-    // Encrypt with Double Ratchet
-    Bytes plaintext = proto_msg.serialize();
-    Bytes ciphertext = verifier.dr_session->encrypt(plaintext);
-    
-    return ciphertext;
+
+    // Create encrypted message using DR session (RUA-style: encrypt payload)
+    return create_dr_oda_message(
+        verifier.sender_id,
+        verifier.get_current_topic(),
+        MessageType::OdaRequest,
+        oda_msg,
+        *verifier.dr_session);
 }
 
 // -----------------------------------------------------------------------------
@@ -77,9 +103,9 @@ Bytes oda_response(CallState& prover, const ProtocolMessage& request_msg) {
     if (request_msg.type != MessageType::OdaRequest) {
         throw std::runtime_error("Expected OdaRequest message");
     }
-    
-    // Deserialize ODA request
-    OdaMessage request = OdaMessage::deserialize(request_msg.payload);
+
+    // Decode the message using DR decryption
+    OdaMessage request = decode_dr_oda_payload(request_msg, *prover.dr_session);
     
     // Use BasicWallet to create presentation
     BasicWallet wallet;
@@ -90,19 +116,14 @@ Bytes oda_response(CallState& prover, const ProtocolMessage& request_msg) {
     response.nonce = request.nonce; // Echo back the nonce
     response.requested_attributes = request.requested_attributes; // Echo back attributes
     response.presentation = presentation;
-    
-    // Create protocol message
-    ProtocolMessage proto_msg;
-    proto_msg.type = MessageType::OdaResponse;
-    proto_msg.sender_id = prover.sender_id;
-    proto_msg.topic = prover.get_current_topic();
-    proto_msg.payload = response.serialize();
-    
-    // Encrypt with Double Ratchet
-    Bytes plaintext = proto_msg.serialize();
-    Bytes ciphertext = prover.dr_session->encrypt(plaintext);
-    
-    return ciphertext;
+
+    // Create encrypted message using DR session (RUA-style: encrypt payload)
+    return create_dr_oda_message(
+        prover.sender_id,
+        prover.get_current_topic(),
+        MessageType::OdaResponse,
+        response,
+        *prover.dr_session);
 }
 
 // -----------------------------------------------------------------------------
@@ -124,9 +145,13 @@ VerificationResult oda_verify(CallState& verifier, const ProtocolMessage& respon
     if (!verifier.pending_oda_request.has_value()) {
         throw std::runtime_error("No pending ODA request found");
     }
-    
-    // Deserialize ODA response
-    OdaMessage response = OdaMessage::deserialize(response_msg.payload);
+
+    if (!verifier.dr_session) {
+        throw std::runtime_error("ODA requires Double Ratchet session");
+    }
+
+    // Decode the message using DR decryption
+    OdaMessage response = decode_dr_oda_payload(response_msg, *verifier.dr_session);
     
     // Get the original request
     OdaMessage& request = verifier.pending_oda_request.value();

@@ -95,9 +95,8 @@ TEST_CASE("ODA: Complete ODA protocol flow", "[oda]") {
         REQUIRE(alice.pending_oda_request.has_value());
         REQUIRE(alice.pending_oda_request->requested_attributes == requested_attrs);
         
-        // Bob receives and decrypts the request
-        Bytes oda_request_plaintext = bob.dr_session->decrypt(oda_request_encrypted);
-        ProtocolMessage oda_request_msg = ProtocolMessage::deserialize(oda_request_plaintext);
+        // Bob receives the request (envelope is plaintext; payload is encrypted)
+        ProtocolMessage oda_request_msg = ProtocolMessage::deserialize(oda_request_encrypted);
         
         REQUIRE(oda_request_msg.type == MessageType::OdaRequest);
         
@@ -105,9 +104,8 @@ TEST_CASE("ODA: Complete ODA protocol flow", "[oda]") {
         Bytes oda_response_encrypted = oda_response(bob, oda_request_msg);
         REQUIRE(!oda_response_encrypted.empty());
         
-        // Alice receives and decrypts the response
-        Bytes oda_response_plaintext = alice.dr_session->decrypt(oda_response_encrypted);
-        ProtocolMessage oda_response_msg = ProtocolMessage::deserialize(oda_response_plaintext);
+        // Alice receives the response (envelope is plaintext; payload is encrypted)
+        ProtocolMessage oda_response_msg = ProtocolMessage::deserialize(oda_response_encrypted);
         
         REQUIRE(oda_response_msg.type == MessageType::OdaResponse);
         
@@ -137,13 +135,11 @@ TEST_CASE("ODA: Complete ODA protocol flow", "[oda]") {
         
         Bytes oda_request_encrypted = oda_request(bob, requested_attrs);
         REQUIRE(!oda_request_encrypted.empty());
-        
-        Bytes oda_request_plaintext = alice.dr_session->decrypt(oda_request_encrypted);
-        ProtocolMessage oda_request_msg = ProtocolMessage::deserialize(oda_request_plaintext);
+
+        ProtocolMessage oda_request_msg = ProtocolMessage::deserialize(oda_request_encrypted);
         
         Bytes oda_response_encrypted = oda_response(alice, oda_request_msg);
-        Bytes oda_response_plaintext = bob.dr_session->decrypt(oda_response_encrypted);
-        ProtocolMessage oda_response_msg = ProtocolMessage::deserialize(oda_response_plaintext);
+        ProtocolMessage oda_response_msg = ProtocolMessage::deserialize(oda_response_encrypted);
         
         auto verification = oda_verify(bob, oda_response_msg);
         
@@ -162,11 +158,9 @@ TEST_CASE("ODA: Complete ODA protocol flow", "[oda]") {
         // First verification
         {
             Bytes req = oda_request(alice, attrs1);
-            Bytes req_plain = bob.dr_session->decrypt(req);
-            ProtocolMessage req_msg = ProtocolMessage::deserialize(req_plain);
+            ProtocolMessage req_msg = ProtocolMessage::deserialize(req);
             Bytes resp = oda_response(bob, req_msg);
-            Bytes resp_plain = alice.dr_session->decrypt(resp);
-            ProtocolMessage resp_msg = ProtocolMessage::deserialize(resp_plain);
+            ProtocolMessage resp_msg = ProtocolMessage::deserialize(resp);
             auto result = oda_verify(alice, resp_msg);
             REQUIRE(result.verified);
         }
@@ -174,11 +168,9 @@ TEST_CASE("ODA: Complete ODA protocol flow", "[oda]") {
         // Second verification
         {
             Bytes req = oda_request(alice, attrs2);
-            Bytes req_plain = bob.dr_session->decrypt(req);
-            ProtocolMessage req_msg = ProtocolMessage::deserialize(req_plain);
+            ProtocolMessage req_msg = ProtocolMessage::deserialize(req);
             Bytes resp = oda_response(bob, req_msg);
-            Bytes resp_plain = alice.dr_session->decrypt(resp);
-            ProtocolMessage resp_msg = ProtocolMessage::deserialize(resp_plain);
+            ProtocolMessage resp_msg = ProtocolMessage::deserialize(resp);
             auto result = oda_verify(alice, resp_msg);
             REQUIRE(result.verified);
         }
@@ -186,11 +178,9 @@ TEST_CASE("ODA: Complete ODA protocol flow", "[oda]") {
         // Third verification
         {
             Bytes req = oda_request(alice, attrs3);
-            Bytes req_plain = bob.dr_session->decrypt(req);
-            ProtocolMessage req_msg = ProtocolMessage::deserialize(req_plain);
+            ProtocolMessage req_msg = ProtocolMessage::deserialize(req);
             Bytes resp = oda_response(bob, req_msg);
-            Bytes resp_plain = alice.dr_session->decrypt(resp);
-            ProtocolMessage resp_msg = ProtocolMessage::deserialize(resp_plain);
+            ProtocolMessage resp_msg = ProtocolMessage::deserialize(resp);
             auto result = oda_verify(alice, resp_msg);
             REQUIRE(result.verified);
         }
@@ -223,13 +213,11 @@ TEST_CASE("ODA: Error handling", "[oda]") {
         
         // Bob creates a request
         Bytes req = oda_request(bob, attrs);
-        Bytes req_plain = alice.dr_session->decrypt(req);
-        ProtocolMessage req_msg = ProtocolMessage::deserialize(req_plain);
+        ProtocolMessage req_msg = ProtocolMessage::deserialize(req);
         
         // Alice creates response  
         Bytes resp = oda_response(alice, req_msg);
-        Bytes resp_plain = bob.dr_session->decrypt(resp);
-        ProtocolMessage resp_msg = ProtocolMessage::deserialize(resp_plain);
+        ProtocolMessage resp_msg = ProtocolMessage::deserialize(resp);
         
         // But if Alice (who didn't initiate) tries to verify, it should fail
         REQUIRE_THROWS(oda_verify(alice, resp_msg));
