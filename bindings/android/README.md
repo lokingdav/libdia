@@ -108,17 +108,17 @@ config.use { ... }
 Protocol state machine:
 
 ```kotlin
-CallState.create(config, remotePhone, isInitiator = true).use { call ->
+CallState.create(config, remotePhone, outgoing = true).use { call ->
     // AKE phase
     call.akeInit()
-    val topic = call.akeTopic()
+    val topic = call.akeTopic
     val request = call.akeRequest()
     val response = call.akeResponse(incomingRequest)
     val complete = call.akeComplete(incomingResponse)
     call.akeFinalize(incomingComplete)
     
     // Get shared key
-    val sharedKey = call.sharedKey()
+    val sharedKey = call.sharedKey
     
     // RUA phase
     call.transitionToRua()
@@ -127,13 +127,41 @@ CallState.create(config, remotePhone, isInitiator = true).use { call ->
     call.ruaFinalize(incomingRuaResp)
     
     // Get remote party info
-    val remote = call.remoteParty()
+    val remote = call.remoteParty
     println("Verified: ${remote.phone}, ${remote.name}")
     
     // Messaging
-    val encrypted = call.encrypt("Hello")
+    val encrypted = call.encrypt("Hello".encodeToByteArray())
     val plaintext = call.decrypt(incomingEncrypted)
 }
+```
+
+### ODA (On-Demand Authentication)
+
+ODA lets one party (the verifier) request selective disclosure from the other party (the prover) after a call has established secure state (typically after RUA).
+
+```kotlin
+// Verifier side
+val odaRequestBytes = call.odaRequest(listOf(
+    "name",
+    "dob"
+))
+sendToPeer(odaRequestBytes)
+
+// Prover side
+val odaResponseBytes = call.odaResponse(receivedOdaRequestBytes)
+sendToPeer(odaResponseBytes)
+
+// Verifier side
+val verification = call.odaVerify(receivedOdaResponseBytes)
+if (verification.verified) {
+    println("Issuer: ${verification.issuer}")
+    println("Disclosed: ${verification.disclosedAttributes}")
+}
+
+// Verification history
+val n = call.odaVerificationCount
+val last = call.odaGetVerification(n - 1)
 ```
 
 ### DiaMessage
@@ -142,11 +170,13 @@ Message parsing:
 
 ```kotlin
 DiaMessage.deserialize(messageBytes).use { msg ->
-    when (msg.getType()) {
+    when (msg.type) {
         LibDia.MSG_AKE_REQUEST -> handleAkeRequest()
         LibDia.MSG_AKE_RESPONSE -> handleAkeResponse()
         LibDia.MSG_RUA_REQUEST -> handleRuaRequest()
         LibDia.MSG_RUA_RESPONSE -> handleRuaResponse()
+        LibDia.MSG_ODA_REQUEST -> handleOdaRequest()
+        LibDia.MSG_ODA_RESPONSE -> handleOdaResponse()
         LibDia.MSG_HEARTBEAT -> handleHeartbeat()
         LibDia.MSG_BYE -> handleBye()
     }
@@ -154,6 +184,8 @@ DiaMessage.deserialize(messageBytes).use { msg ->
     // Or use helpers:
     if (msg.isAkeRequest) { ... }
     if (msg.isHeartbeat) { ... }
+    if (msg.isOdaRequest) { ... }
+    if (msg.isOdaResponse) { ... }
 }
 ```
 
@@ -218,6 +250,7 @@ See `test/DiaTest.kt` for comprehensive unit tests covering:
 - CallState creation and roles
 - Full AKE protocol exchange
 - RUA identity verification
+- ODA (On-Demand Authentication)
 - Double Ratchet messaging
 - Message type parsing
 

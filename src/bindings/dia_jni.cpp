@@ -408,6 +408,167 @@ static void native_ruaFinalize(JNIEnv* env, jclass, jlong handle, jbyteArray jMs
     rcIsOk(env, "dia_rua_finalize", dia_rua_finalize(state, msgData.data(), msgData.size()));
 }
 
+/* ========================== ODA Protocol ================================== */
+
+static jbyteArray native_odaRequest(JNIEnv* env, jclass, jlong handle, jobjectArray jAttributes) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return nullptr;
+    }
+    if (!jAttributes) {
+        throwIllegalArg(env, "attributes is null");
+        return nullptr;
+    }
+
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+    const jsize n = env->GetArrayLength(jAttributes);
+    if (n <= 0) {
+        throwIllegalArg(env, "attributes is empty");
+        return nullptr;
+    }
+
+    std::vector<std::string> attrs;
+    attrs.reserve(static_cast<size_t>(n));
+    for (jsize i = 0; i < n; i++) {
+        auto jAttr = (jstring)env->GetObjectArrayElement(jAttributes, i);
+        if (!jAttr) {
+            throwIllegalArg(env, "attributes contains null element");
+            return nullptr;
+        }
+        const char* s = env->GetStringUTFChars(jAttr, nullptr);
+        if (!s) {
+            env->DeleteLocalRef(jAttr);
+            return nullptr;
+        }
+        attrs.emplace_back(s);
+        env->ReleaseStringUTFChars(jAttr, s);
+        env->DeleteLocalRef(jAttr);
+    }
+
+    std::vector<const char*> cAttrs;
+    cAttrs.reserve(static_cast<size_t>(n) + 1);
+    for (const auto& a : attrs) {
+        cAttrs.push_back(a.c_str());
+    }
+    cAttrs.push_back(nullptr);
+
+    unsigned char* out = nullptr;
+    size_t outLen = 0;
+    if (!rcIsOk(env, "dia_oda_request", dia_oda_request(state, cAttrs.data(), &out, &outLen))) {
+        return nullptr;
+    }
+    jbyteArray result = makeByteArray(env, out, outLen);
+    dia_free_bytes(out);
+    return result;
+}
+
+static jbyteArray native_odaResponse(JNIEnv* env, jclass, jlong handle, jbyteArray jMsgData) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return nullptr;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+    auto msgData = getBytes(env, jMsgData);
+    if (msgData.empty()) {
+        throwIllegalArg(env, "msgData is empty");
+        return nullptr;
+    }
+
+    unsigned char* out = nullptr;
+    size_t outLen = 0;
+    if (!rcIsOk(env, "dia_oda_response", dia_oda_response(state, msgData.data(), msgData.size(), &out, &outLen))) {
+        return nullptr;
+    }
+    jbyteArray result = makeByteArray(env, out, outLen);
+    dia_free_bytes(out);
+    return result;
+}
+
+static jobjectArray odaVerificationToStringArray(JNIEnv* env, const dia_oda_verification_t* info) {
+    // Flattened String[]:
+    // [timestamp, verified("true"/"false"), issuer, credentialType, issuanceDate, expirationDate, name0, value0, ...]
+    size_t pairCount = 0;
+    if (info && info->attribute_names && info->attribute_values) {
+        while (info->attribute_names[pairCount] && info->attribute_values[pairCount]) {
+            pairCount++;
+        }
+    }
+
+    const jsize base = 6;
+    const jsize total = static_cast<jsize>(base + 2 * pairCount);
+    jclass strClass = env->FindClass("java/lang/String");
+    jobjectArray arr = env->NewObjectArray(total, strClass, nullptr);
+    if (!arr) return nullptr;
+
+    auto safeStr = [&](const char* s) -> jstring {
+        return env->NewStringUTF(s ? s : "");
+    };
+
+    env->SetObjectArrayElement(arr, 0, safeStr(info ? info->timestamp : ""));
+    env->SetObjectArrayElement(arr, 1, env->NewStringUTF((info && info->verified) ? "true" : "false"));
+    env->SetObjectArrayElement(arr, 2, safeStr(info ? info->issuer : ""));
+    env->SetObjectArrayElement(arr, 3, safeStr(info ? info->credential_type : ""));
+    env->SetObjectArrayElement(arr, 4, safeStr(info ? info->issuance_date : ""));
+    env->SetObjectArrayElement(arr, 5, safeStr(info ? info->expiration_date : ""));
+
+    for (size_t i = 0; i < pairCount; i++) {
+        env->SetObjectArrayElement(arr, static_cast<jsize>(base + 2 * i), safeStr(info->attribute_names[i]));
+        env->SetObjectArrayElement(arr, static_cast<jsize>(base + 2 * i + 1), safeStr(info->attribute_values[i]));
+    }
+    return arr;
+}
+
+static jobjectArray native_odaVerify(JNIEnv* env, jclass, jlong handle, jbyteArray jMsgData) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return nullptr;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+    auto msgData = getBytes(env, jMsgData);
+    if (msgData.empty()) {
+        throwIllegalArg(env, "msgData is empty");
+        return nullptr;
+    }
+
+    dia_oda_verification_t* info = nullptr;
+    if (!rcIsOk(env, "dia_oda_verify", dia_oda_verify(state, msgData.data(), msgData.size(), &info))) {
+        return nullptr;
+    }
+
+    jobjectArray out = odaVerificationToStringArray(env, info);
+    dia_free_oda_verification(info);
+    return out;
+}
+
+static jint native_odaGetVerificationCount(JNIEnv* env, jclass, jlong handle) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return 0;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+    return static_cast<jint>(dia_oda_get_verification_count(state));
+}
+
+static jobjectArray native_odaGetVerification(JNIEnv* env, jclass, jlong handle, jint index) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return nullptr;
+    }
+    if (index < 0) {
+        throwIllegalArg(env, "index must be >= 0");
+        return nullptr;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+
+    dia_oda_verification_t* info = nullptr;
+    if (!rcIsOk(env, "dia_oda_get_verification", dia_oda_get_verification(state, static_cast<size_t>(index), &info))) {
+        return nullptr;
+    }
+    jobjectArray out = odaVerificationToStringArray(env, info);
+    dia_free_oda_verification(info);
+    return out;
+}
+
 /* ========================== Message API =================================== */
 
 static jlong native_messageDeserialize(JNIEnv* env, jclass, jbyteArray jData) {
@@ -688,6 +849,13 @@ static JNINativeMethod gMethods[] = {
     { "ruaRequest",     "(J)[B",                            (void*)native_ruaRequest },
     { "ruaResponse",    "(J[B)[B",                          (void*)native_ruaResponse },
     { "ruaFinalize",    "(J[B)V",                           (void*)native_ruaFinalize },
+
+    // ODA Protocol
+    { "odaRequest",              "(J[Ljava/lang/String;)[B",        (void*)native_odaRequest },
+    { "odaResponse",             "(J[B)[B",                         (void*)native_odaResponse },
+    { "odaVerify",               "(J[B)[Ljava/lang/String;",        (void*)native_odaVerify },
+    { "odaGetVerificationCount", "(J)I",                            (void*)native_odaGetVerificationCount },
+    { "odaGetVerification",      "(JI)[Ljava/lang/String;",         (void*)native_odaGetVerification },
 
     // Messages
     { "messageDeserialize",   "([B)J",                      (void*)native_messageDeserialize },
