@@ -493,7 +493,7 @@ std::vector<BenchCase> make_protocol_benchmarks() {
     // Enrollment
     cases.push_back(BenchCase{
         "Enrollment client: create_request (tickets=1)",
-        50,
+        120,
         {},
         [fx]() {
             (void)create_enrollment_request(
@@ -507,7 +507,7 @@ std::vector<BenchCase> make_protocol_benchmarks() {
 
     cases.push_back(BenchCase{
         "Enrollment server: process_request (tickets=1)",
-        50,
+        80,
         {},
         [fx]() {
             (void)process_enrollment(fx->server, fx->enrollment_request);
@@ -516,7 +516,7 @@ std::vector<BenchCase> make_protocol_benchmarks() {
 
     cases.push_back(BenchCase{
         "Enrollment client: finalize (tickets=1)",
-        50,
+        900,
         {},
         [fx]() {
             (void)finalize_enrollment(
@@ -616,7 +616,7 @@ std::vector<BenchCase> make_protocol_benchmarks() {
         auto st = std::make_shared<State>();
         cases.push_back(BenchCase{
             "RUA caller: rua_request (cached peer state)",
-            40,
+            120,
             [fx, st](int n) {
                 st->ctxs = prepare_rua_request_ctxs(*fx, n);
                 st->idx = 0;
@@ -669,59 +669,118 @@ std::vector<BenchCase> make_protocol_benchmarks() {
     // ODA operations (after RUA)
     {
         struct State {
-            std::vector<OdaRequestCtx> ctxs;
-            std::size_t idx = 0;
+            std::unique_ptr<CallState> verifier;
+            std::vector<std::string> attrs;
         };
         auto st = std::make_shared<State>();
         cases.push_back(BenchCase{
             "ODA verifier: oda_request (after RUA)",
-            25,
+            6000,
             [fx, st](int n) {
-                st->ctxs = prepare_oda_request_ctxs(*fx, n);
-                st->idx = 0;
+                auto pair = make_call_pair(fx->alice_cfg, fx->bob_cfg);
+                set_fixed_ts(*pair.alice, *pair.bob, fx->ts);
+
+                pair.alice->apply_peer_session(fx->alice_peer);
+                pair.bob->apply_peer_session(fx->bob_peer);
+                run_rua_handshake(*pair.alice, *pair.bob);
+
+                st->verifier = std::move(pair.alice);
+                st->attrs = {"name"};
             },
             [st]() {
-                auto& c = st->ctxs[st->idx++];
-                std::vector<std::string> attrs = {"name"};
-                (void)oda_request(*c.verifier, attrs);
+                (void)oda_request(*st->verifier, st->attrs);
             },
         });
     }
     {
         struct State {
-            std::vector<OdaResponseCtx> ctxs;
+            std::unique_ptr<CallState> prover;
+            std::unique_ptr<CallState> verifier;
+            std::vector<ProtocolMessage> requests;
             std::size_t idx = 0;
+            std::vector<std::string> attrs;
         };
         auto st = std::make_shared<State>();
         cases.push_back(BenchCase{
             "ODA prover: oda_response",
-            25,
+            170,
             [fx, st](int n) {
-                st->ctxs = prepare_oda_response_ctxs(*fx, n);
+                auto pair = make_call_pair(fx->alice_cfg, fx->bob_cfg);
+                set_fixed_ts(*pair.alice, *pair.bob, fx->ts);
+
+                pair.alice->apply_peer_session(fx->alice_peer);
+                pair.bob->apply_peer_session(fx->bob_peer);
+                run_rua_handshake(*pair.alice, *pair.bob);
+
+                st->verifier = std::move(pair.alice);
+                st->prover = std::move(pair.bob);
+                st->attrs = {"name"};
+                st->requests.clear();
+                st->requests.reserve(static_cast<std::size_t>(n));
                 st->idx = 0;
+
+                for (int i = 0; i < n; ++i) {
+                    Bytes req_bytes = oda_request(*st->verifier, st->attrs);
+                    st->requests.push_back(ProtocolMessage::deserialize(req_bytes));
+                }
             },
             [st]() {
-                auto& c = st->ctxs[st->idx++];
-                (void)oda_response(*c.prover, c.request_msg);
+                auto& msg = st->requests[st->idx++];
+                (void)oda_response(*st->prover, msg);
             },
         });
     }
     {
         struct State {
-            std::vector<OdaVerifyCtx> ctxs;
+            std::unique_ptr<CallState> verifier;
+            std::unique_ptr<CallState> prover;
+            std::vector<ProtocolMessage> responses;
+            std::vector<OdaMessage> pending;
             std::size_t idx = 0;
+            std::vector<std::string> attrs;
         };
         auto st = std::make_shared<State>();
         cases.push_back(BenchCase{
             "ODA verifier: oda_verify",
-            25,
+            75,
             [fx, st](int n) {
-                st->ctxs = prepare_oda_verify_ctxs(*fx, n);
+                auto pair = make_call_pair(fx->alice_cfg, fx->bob_cfg);
+                set_fixed_ts(*pair.alice, *pair.bob, fx->ts);
+
+                pair.alice->apply_peer_session(fx->alice_peer);
+                pair.bob->apply_peer_session(fx->bob_peer);
+                run_rua_handshake(*pair.alice, *pair.bob);
+
+                st->verifier = std::move(pair.alice);
+                st->prover = std::move(pair.bob);
+                st->attrs = {"name"};
+                st->responses.clear();
+                st->pending.clear();
+                st->responses.reserve(static_cast<std::size_t>(n));
+                st->pending.reserve(static_cast<std::size_t>(n));
                 st->idx = 0;
+
+                st->verifier->oda_verifications.clear();
+                st->verifier->oda_verifications.reserve(static_cast<std::size_t>(n));
+
+                for (int i = 0; i < n; ++i) {
+                    Bytes req_bytes = oda_request(*st->verifier, st->attrs);
+                    ProtocolMessage req_msg = ProtocolMessage::deserialize(req_bytes);
+
+                    // Snapshot the pending request that oda_verify expects later.
+                    if (!st->verifier->pending_oda_request.has_value()) {
+                        throw std::runtime_error("benchmark: missing pending ODA request");
+                    }
+                    st->pending.push_back(st->verifier->pending_oda_request.value());
+
+                    Bytes resp_bytes = oda_response(*st->prover, req_msg);
+                    st->responses.push_back(ProtocolMessage::deserialize(resp_bytes));
+                }
             },
             [st]() {
-                auto& c = st->ctxs[st->idx++];
-                (void)oda_verify(*c.verifier, c.response_msg);
+                const std::size_t i = st->idx++;
+                st->verifier->pending_oda_request = st->pending[i];
+                (void)oda_verify(*st->verifier, st->responses[i]);
             },
         });
     }
