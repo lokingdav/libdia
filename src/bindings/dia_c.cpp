@@ -5,6 +5,7 @@
 #include "../protocol/rua.hpp"
 #include "../protocol/oda.hpp"
 #include "../protocol/enrollment.hpp"
+#include "../protocol/benchmark.hpp"
 #include "../crypto/ecgroup.hpp"
 #include "../crypto/bbs.hpp"
 #include "../crypto/voprf.hpp"
@@ -110,6 +111,27 @@ void dia_free_oda_verification(dia_oda_verification_t* info) {
         }
         
         delete info;
+    }
+}
+
+/*==============================================================================
+ * Benchmarks
+ *============================================================================*/
+
+int dia_bench_protocol_csv(int samples, int iters_override, char** out) {
+    if (!out) return DIA_ERR_INVALID_ARG;
+    if (samples < 1) return DIA_ERR_INVALID_ARG;
+
+    try {
+        protocol::bench::BenchOptions opts;
+        opts.samples = samples;
+        opts.iters_override = iters_override;
+
+        std::string csv = protocol::bench::run_protocol_benchmarks_csv(opts);
+        *out = copy_to_c_string(csv);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR;
     }
 }
 

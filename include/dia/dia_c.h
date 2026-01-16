@@ -88,6 +88,19 @@ void dia_free_remote_party(dia_remote_party_t* rp);
 void dia_free_oda_verification(dia_oda_verification_t* info);
 
 /*==============================================================================
+ * Benchmarks
+ *============================================================================*/
+
+/**
+ * Run protocol-operation benchmarks and return results as CSV.
+ * Caller must free returned string with dia_free_string().
+ *
+ * @param samples        Number of timing samples per case (must be >= 1).
+ * @param iters_override If > 0, overrides each case's internal iteration count.
+ */
+int dia_bench_protocol_csv(int samples, int iters_override, char** out);
+
+/*==============================================================================
  * Config API
  *============================================================================*/
 
