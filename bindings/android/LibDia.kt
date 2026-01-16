@@ -24,6 +24,10 @@ object LibDia {
     const val MSG_ODA_REQUEST = 8
     const val MSG_ODA_RESPONSE = 9
 
+    // ===================== Benchmarks =====================
+    /** Run protocol-operation benchmarks and return results as CSV. */
+    external fun benchProtocolCsv(samples: Int, itersOverride: Int): String
+
     // ===================== Config =====================
     /** Parse a Config from environment variable format string. Returns native handle. */
     external fun configFromEnv(envContent: String): Long

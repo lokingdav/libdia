@@ -64,8 +64,8 @@ make -j$(nproc)
 
 # Use with Go (from bindings/go directory)
 cd ../bindings/go
-PKG_CONFIG_PATH=/path/to/libdia/build go test
-PKG_CONFIG_PATH=/path/to/libdia/build go build
+PKG_CONFIG_PATH=/path/to/libdia/build go test -tags dia_dev
+PKG_CONFIG_PATH=/path/to/libdia/build go build -tags dia_dev
 ```
 
 ## Quick Start

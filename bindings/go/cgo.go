@@ -7,13 +7,13 @@
 //
 // Building for development (from source):
 //
-//	PKG_CONFIG_PATH=/path/to/libdia/build go build
+//	PKG_CONFIG_PATH=/path/to/libdia/build go build -tags dia_dev
 //
-// The PKG_CONFIG_PATH should point to the directory containing dia-dev.pc
+// The "dia_dev" build tag switches pkg-config from "dia" (system install)
+// to "dia-dev" (from the build directory).
 package dia
 
 /*
-#cgo pkg-config: dia
 #include <dia/dia_c.h>
 #include <stdlib.h>
 */
@@ -76,6 +76,28 @@ func rcErr(rc C.int) error {
 	default:
 		return fmt.Errorf("%w: rc=%d", ErrUnknown, int(rc))
 	}
+}
+
+// ============================================================================
+// Benchmarks
+// ============================================================================
+
+// BenchProtocolCSV runs the protocol-operation benchmarks and returns the CSV string.
+//
+// samples must be >= 1. If itersOverride > 0, it overrides each case's default iteration count.
+func BenchProtocolCSV(samples, itersOverride int) (string, error) {
+	ensureInit()
+	if samples < 1 {
+		return "", ErrInvalidArg
+	}
+
+	var out *C.char
+	rc := C.dia_bench_protocol_csv(C.int(samples), C.int(itersOverride), &out)
+	if err := rcErr(rc); err != nil {
+		return "", err
+	}
+	defer C.dia_free_string(out)
+	return C.GoString(out), nil
 }
 
 // ============================================================================

@@ -8,5 +8,5 @@ includedir=${prefix}/include
 Name: dia-dev
 Description: DIA protocol library (development build)
 Version: @PROJECT_VERSION@
-Libs: -L${builddir}/src -L${builddir}/lib -ldia_c_interface -ldia -lecgroup -lmcl @SODIUM_PKG_LIBS@ -lstdc++ -lpthread -ldl
+Libs: -L${builddir}/src -L${builddir}/lib -ldia_c_interface -ldia -lecgroup -lmcl @SODIUM_PKG_LIBS@ -lstdc++ -lm -lpthread -ldl
 Cflags: -I${includedir} @SODIUM_PKG_CFLAGS@
