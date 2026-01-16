@@ -262,6 +262,33 @@ static void native_callStateTransitionToRua(JNIEnv* env, jclass, jlong handle) {
     rcIsOk(env, "dia_callstate_transition_to_rua", dia_callstate_transition_to_rua(state));
 }
 
+static jbyteArray native_callStateExportPeerSession(JNIEnv* env, jclass, jlong handle) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return nullptr;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+
+    unsigned char* out = nullptr;
+    size_t outLen = 0;
+    if (!rcIsOk(env, "dia_callstate_export_peer_session", dia_callstate_export_peer_session(state, &out, &outLen))) {
+        return nullptr;
+    }
+    jbyteArray result = makeByteArray(env, out, outLen);
+    dia_free_bytes(out);
+    return result;
+}
+
+static void native_callStateApplyPeerSession(JNIEnv* env, jclass, jlong handle, jbyteArray jData) {
+    if (!handle) {
+        throwIllegalArg(env, "callstate handle is null");
+        return;
+    }
+    auto state = reinterpret_cast<dia_callstate_t*>(handle);
+    auto data = getBytes(env, jData);
+    rcIsOk(env, "dia_callstate_apply_peer_session", dia_callstate_apply_peer_session(state, data.ptr, data.len));
+}
+
 /* ========================== AKE Protocol ================================== */
 
 static void native_akeInit(JNIEnv* env, jclass, jlong handle) {
@@ -835,6 +862,8 @@ static JNINativeMethod gMethods[] = {
     { "callStateIsRuaActive",      "(J)Z",                     (void*)native_callStateIsRuaActive },
     { "callStateGetRemoteParty",   "(J)[Ljava/lang/String;",   (void*)native_callStateGetRemoteParty },
     { "callStateTransitionToRua",  "(J)V",                     (void*)native_callStateTransitionToRua },
+    { "callStateExportPeerSession", "(J)[B",                   (void*)native_callStateExportPeerSession },
+    { "callStateApplyPeerSession",  "(J[B)V",                  (void*)native_callStateApplyPeerSession },
 
     // AKE Protocol
     { "akeInit",       "(J)V",                              (void*)native_akeInit },

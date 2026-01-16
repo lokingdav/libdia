@@ -133,6 +133,29 @@ TEST_CASE("Protocol CallState", "[protocol][callstate]") {
         REQUIRE(state.shared_key == key);
     }
 
+    SECTION("PeerSessionState export/apply round-trip") {
+        auto config = make_test_config();
+        protocol::CallState a(config, "0987654321", true);
+        protocol::CallState b(config, "0987654321", true);
+
+        a.shared_key = protocol::Bytes(32, 0xAA);
+        a.counterpart_amf_pk = {0x01, 0x02, 0x03};
+        a.counterpart_pke_pk = {0x04, 0x05};
+        a.counterpart_dr_pk = protocol::Bytes(32, 0xBB);
+
+        protocol::PeerSessionState exported = a.export_peer_session();
+        protocol::Bytes blob = exported.serialize();
+        protocol::PeerSessionState parsed = protocol::PeerSessionState::deserialize(blob);
+
+        b.apply_peer_session(parsed);
+
+        REQUIRE(b.shared_key == a.shared_key);
+        REQUIRE(b.counterpart_amf_pk == a.counterpart_amf_pk);
+        REQUIRE(b.counterpart_pke_pk == a.counterpart_pke_pk);
+        REQUIRE(b.counterpart_dr_pk == a.counterpart_dr_pk);
+        REQUIRE(b.dr_session == nullptr);
+    }
+
     SECTION("update_caller sets challenge and proof") {
         auto config = make_test_config();
         protocol::CallState state(config, "0987654321", true);

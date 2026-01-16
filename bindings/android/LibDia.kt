@@ -71,6 +71,12 @@ object LibDia {
     /** Transition to RUA topic (updates current topic). */
     external fun callStateTransitionToRua(handle: Long)
 
+    /** Export per-peer session state (opaque bytes) for persistence. */
+    external fun callStateExportPeerSession(handle: Long): ByteArray
+
+    /** Apply previously exported peer session state. */
+    external fun callStateApplyPeerSession(handle: Long, data: ByteArray)
+
     // ===================== AKE Protocol =====================
     /** Initialize AKE state (generates DH keys, computes topic). */
     external fun akeInit(callStateHandle: Long)
@@ -322,6 +328,12 @@ class CallState private constructor(internal val handle: Long) : AutoCloseable {
 
     /** Transition to RUA topic (updates current topic). */
     fun transitionToRua() = LibDia.callStateTransitionToRua(handle)
+
+    /** Export per-peer session state (opaque bytes) for persistence. */
+    fun exportPeerSession(): ByteArray = LibDia.callStateExportPeerSession(handle)
+
+    /** Apply previously exported peer session state. */
+    fun applyPeerSession(data: ByteArray) = LibDia.callStateApplyPeerSession(handle, data)
 
     // ===================== AKE Protocol =====================
 

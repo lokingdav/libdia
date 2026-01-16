@@ -5,6 +5,8 @@
 #include <iomanip>
 #include <sstream>
 #include <random>
+#include <stdexcept>
+#include <array>
 
 namespace protocol {
 
@@ -121,6 +123,74 @@ void CallState::update_caller(const Bytes& chal, const Bytes& proof) {
     std::lock_guard<std::mutex> lock(mu_);
     ake.chal0 = chal;
     ake.caller_proof = proof;
+}
+
+PeerSessionState CallState::export_peer_session() const {
+    std::lock_guard<std::mutex> lock(mu_);
+    PeerSessionState out;
+    out.shared_key = shared_key;
+    out.counterpart_amf_pk = counterpart_amf_pk;
+    out.counterpart_pke_pk = counterpart_pke_pk;
+    out.counterpart_dr_pk = counterpart_dr_pk;
+    return out;
+}
+
+void CallState::apply_peer_session(const PeerSessionState& peer) {
+    std::lock_guard<std::mutex> lock(mu_);
+    shared_key = peer.shared_key;
+    counterpart_amf_pk = peer.counterpart_amf_pk;
+    counterpart_pke_pk = peer.counterpart_pke_pk;
+    counterpart_dr_pk = peer.counterpart_dr_pk;
+
+    // Any existing DR session (if present) is tied to the old shared key.
+    dr_session.reset();
+}
+
+Bytes PeerSessionState::serialize() const {
+    using dia::utils::append_lp;
+    using dia::utils::append_u32_be;
+
+    Bytes out;
+
+    // Header: magic + version
+    static constexpr std::array<uint8_t, 4> kMagic{{'D','I','A','P'}};
+    out.insert(out.end(), kMagic.begin(), kMagic.end());
+    append_u32_be(out, 1);
+
+    append_lp(out, shared_key);
+    append_lp(out, counterpart_amf_pk);
+    append_lp(out, counterpart_pke_pk);
+    append_lp(out, counterpart_dr_pk);
+
+    return out;
+}
+
+PeerSessionState PeerSessionState::deserialize(const Bytes& data) {
+    using dia::utils::read_lp;
+    using dia::utils::read_u32_be;
+
+    if (data.size() < 8) {
+        throw std::runtime_error("PeerSessionState: data too short");
+    }
+
+    size_t off = 0;
+    if (!(data[0] == 'D' && data[1] == 'I' && data[2] == 'A' && data[3] == 'P')) {
+        throw std::runtime_error("PeerSessionState: bad magic");
+    }
+    off += 4;
+
+    uint32_t version = read_u32_be(data, off);
+    if (version != 1) {
+        throw std::runtime_error("PeerSessionState: unsupported version");
+    }
+
+    PeerSessionState out;
+    out.shared_key = read_lp(data, off);
+    out.counterpart_amf_pk = read_lp(data, off);
+    out.counterpart_pke_pk = read_lp(data, off);
+    out.counterpart_dr_pk = read_lp(data, off);
+
+    return out;
 }
 
 // -----------------------------------------------------------------------------

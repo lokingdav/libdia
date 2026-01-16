@@ -296,13 +296,6 @@ Bytes ake_complete(CallState& caller, const ProtocolMessage& recipient_msg) {
     );
     caller.set_shared_key(shared_key);
     
-    // Initialize Double Ratchet session as caller
-    // Caller uses recipient's DR public key
-    caller.dr_session = doubleratchet::DrSession::init_as_caller(
-        shared_key,
-        caller.counterpart_dr_pk
-    );
-    
     // Create AkeComplete message with concatenated DH public keys
     AkeMessage ake_msg;
     ake_msg.dh_pk = concat_bytes(caller.ake.dh_pk, recipient_ake.dh_pk);
@@ -362,14 +355,6 @@ void ake_finalize(CallState& recipient, const ProtocolMessage& caller_msg) {
         dh_secret
     );
     recipient.set_shared_key(shared_key);
-    
-    // Initialize Double Ratchet session as recipient
-    // Recipient uses their own DR key pair
-    recipient.dr_session = doubleratchet::DrSession::init_as_recipient(
-        shared_key,
-        recipient.config.dr_private_key,
-        recipient.config.dr_public_key
-    );
 }
 
 } // namespace protocol

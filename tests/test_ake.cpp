@@ -169,38 +169,21 @@ TEST_CASE("Complete AKE flow", "[ake]") {
     ProtocolMessage complete_msg = ProtocolMessage::deserialize(complete_bytes);
     REQUIRE(complete_msg.is_ake_complete());
     
-    // Verify Alice has shared key and DR session
+    // Verify Alice has shared key and learned counterpart keys
     REQUIRE(!alice.shared_key.empty());
-    REQUIRE(alice.dr_session != nullptr);
     REQUIRE(!alice.counterpart_amf_pk.empty());
+    REQUIRE(!alice.counterpart_dr_pk.empty());
     
     // Step 4: Bob processes AkeComplete (finalize)
     REQUIRE_NOTHROW(ake_finalize(bob, complete_msg));
     
-    // Verify Bob has shared key and DR session
+    // Verify Bob has shared key and learned counterpart keys
     REQUIRE(!bob.shared_key.empty());
-    REQUIRE(bob.dr_session != nullptr);
+    REQUIRE(!bob.counterpart_amf_pk.empty());
+    REQUIRE(!bob.counterpart_dr_pk.empty());
     
     // Both should have the same shared key
     REQUIRE(alice.shared_key == bob.shared_key);
-    
-    // Test DR session works
-    std::string test_msg = "Hello, Bob!";
-    Bytes plaintext(test_msg.begin(), test_msg.end());
-    
-    Bytes ciphertext = alice.dr_session->encrypt(plaintext);
-    Bytes decrypted = bob.dr_session->decrypt(ciphertext);
-    
-    REQUIRE(decrypted == plaintext);
-    
-    // Test bidirectional
-    std::string reply = "Hello, Alice!";
-    Bytes reply_pt(reply.begin(), reply.end());
-    
-    Bytes reply_ct = bob.dr_session->encrypt(reply_pt);
-    Bytes reply_dec = alice.dr_session->decrypt(reply_ct);
-    
-    REQUIRE(reply_dec == reply_pt);
 }
 
 TEST_CASE("AKE fails with wrong message type", "[ake]") {

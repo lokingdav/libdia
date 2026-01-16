@@ -207,6 +207,37 @@ int dia_callstate_get_shared_key(const dia_callstate_t* state,
     }
 }
 
+int dia_callstate_export_peer_session(const dia_callstate_t* state,
+                                      unsigned char** out,
+                                      size_t* out_len) {
+    if (!state || !out || !out_len) return DIA_ERR_INVALID_ARG;
+
+    try {
+        PeerSessionState peer = state->state->export_peer_session();
+        Bytes serialized = peer.serialize();
+        copy_to_c_bytes(serialized, out, out_len);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR;
+    }
+}
+
+int dia_callstate_apply_peer_session(dia_callstate_t* state,
+                                     const unsigned char* data,
+                                     size_t data_len) {
+    if (!state || (!data && data_len != 0)) return DIA_ERR_INVALID_ARG;
+
+    try {
+        Bytes buf;
+        buf.assign(data, data + data_len);
+        PeerSessionState peer = PeerSessionState::deserialize(buf);
+        state->state->apply_peer_session(peer);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR_PARSE;
+    }
+}
+
 int dia_callstate_get_ticket(const dia_callstate_t* state,
                              unsigned char** out,
                              size_t* out_len) {

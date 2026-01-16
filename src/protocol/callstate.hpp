@@ -103,6 +103,24 @@ struct OdaVerificationInfo {
 };
 
 // -----------------------------------------------------------------------------
+// PeerSessionState - Persisted per-peer state to allow RUA-only on subsequent calls
+// -----------------------------------------------------------------------------
+struct PeerSessionState {
+    // Shared secret established from the last completed protocol run.
+    // This enables skipping AKE on subsequent calls.
+    Bytes shared_key;
+
+    // Counterpart public keys learned during the protocol.
+    Bytes counterpart_amf_pk;
+    Bytes counterpart_pke_pk;
+    Bytes counterpart_dr_pk;
+
+    // Serialize/deserialize to an opaque byte blob suitable for storage.
+    Bytes serialize() const;
+    static PeerSessionState deserialize(const Bytes& data);
+};
+
+// -----------------------------------------------------------------------------
 // CallState - Main state container for a call session
 // -----------------------------------------------------------------------------
 class CallState {
@@ -125,6 +143,11 @@ public:
     // Setters
     void set_shared_key(const Bytes& key);
     void update_caller(const Bytes& chal, const Bytes& proof);
+
+    // Peer session state import/export.
+    // Controllers can persist this across calls to enable RUA-only flows.
+    PeerSessionState export_peer_session() const;
+    void apply_peer_session(const PeerSessionState& peer);
 
     // Public fields (matching Go struct - could be made private with getters if preferred)
     bool        is_outgoing;
@@ -149,7 +172,7 @@ public:
     std::vector<OdaVerificationInfo> oda_verifications;  // History of ODA verifications
     std::optional<OdaMessage>        pending_oda_request; // Current pending request (if verifier)
     
-    // Double Ratchet session (initialized after AKE completes)
+    // Double Ratchet session (initialized lazily when needed, e.g. at RUA)
     std::unique_ptr<doubleratchet::DrSession> dr_session;
 
 private:

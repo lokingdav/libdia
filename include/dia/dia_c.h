@@ -164,6 +164,23 @@ int dia_callstate_get_remote_party(const dia_callstate_t* state,
 /** Transition to RUA topic (updates current topic). */
 int dia_callstate_transition_to_rua(dia_callstate_t* state);
 
+/**
+ * Export per-peer session state as an opaque byte blob.
+ * Controllers can persist this to enable RUA-only on subsequent calls.
+ * Caller must free output with dia_free_bytes().
+ */
+int dia_callstate_export_peer_session(const dia_callstate_t* state,
+                                      unsigned char** out,
+                                      size_t* out_len);
+
+/**
+ * Apply previously exported peer session state.
+ * This resets any existing DR session so it can be re-initialized lazily.
+ */
+int dia_callstate_apply_peer_session(dia_callstate_t* state,
+                                     const unsigned char* data,
+                                     size_t data_len);
+
 /*==============================================================================
  * AKE Protocol (Authenticated Key Exchange)
  *============================================================================*/

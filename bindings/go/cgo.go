@@ -239,6 +239,35 @@ func (cs *CallState) SharedKey() ([]byte, error) {
 	return C.GoBytes(unsafe.Pointer(out), C.int(outLen)), nil
 }
 
+// ExportPeerSession exports per-peer session state as an opaque byte blob.
+// Persist this and apply it to a future CallState to enable RUA-only flows.
+func (cs *CallState) ExportPeerSession() ([]byte, error) {
+	if cs == nil || cs.handle == nil {
+		return nil, ErrInvalidArg
+	}
+	var out *C.uchar
+	var outLen C.size_t
+	rc := C.dia_callstate_export_peer_session(cs.handle, &out, &outLen)
+	if err := rcErr(rc); err != nil {
+		return nil, err
+	}
+	defer C.dia_free_bytes(out)
+	return C.GoBytes(unsafe.Pointer(out), C.int(outLen)), nil
+}
+
+// ApplyPeerSession applies previously exported per-peer session state.
+func (cs *CallState) ApplyPeerSession(data []byte) error {
+	if cs == nil || cs.handle == nil {
+		return ErrInvalidArg
+	}
+	var ptr *C.uchar
+	if len(data) > 0 {
+		ptr = (*C.uchar)(unsafe.Pointer(&data[0]))
+	}
+	rc := C.dia_callstate_apply_peer_session(cs.handle, ptr, C.size_t(len(data)))
+	return rcErr(rc)
+}
+
 // Ticket returns the access ticket.
 func (cs *CallState) Ticket() ([]byte, error) {
 	if cs == nil || cs.handle == nil {

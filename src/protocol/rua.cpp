@@ -7,6 +7,34 @@ namespace protocol {
 
 using namespace dia::utils;
 
+static void ensure_dr_session(CallState& party) {
+    if (party.dr_session) {
+        return;
+    }
+
+    if (party.shared_key.size() != doubleratchet::KEY_SIZE) {
+        throw RuaError("DR session not initialized: shared_key missing/invalid (need AKE or restored peer state)");
+    }
+
+    if (party.iam_caller()) {
+        if (party.counterpart_dr_pk.size() != doubleratchet::KEY_SIZE) {
+            throw RuaError("DR session not initialized: missing counterpart DR public key");
+        }
+        party.dr_session = doubleratchet::DrSession::init_as_caller(
+            party.shared_key,
+            party.counterpart_dr_pk
+        );
+        return;
+    }
+
+    // Recipient initializes using their own long-term DR keypair.
+    party.dr_session = doubleratchet::DrSession::init_as_recipient(
+        party.shared_key,
+        party.config.dr_private_key,
+        party.config.dr_public_key
+    );
+}
+
 // -----------------------------------------------------------------------------
 // RTU creation from config
 // -----------------------------------------------------------------------------
@@ -178,9 +206,7 @@ RuaMessage decode_dr_rua_payload(
 // -----------------------------------------------------------------------------
 
 Bytes rua_request(CallState& caller) {
-    if (!caller.dr_session) {
-        throw RuaError("DR session not initialized - AKE must complete first");
-    }
+    ensure_dr_session(caller);
     
     // Initialize RUA if not already done
     if (caller.rua.topic.empty()) {
@@ -223,9 +249,7 @@ Bytes rua_request(CallState& caller) {
 }
 
 Bytes rua_response(CallState& recipient, const ProtocolMessage& caller_msg) {
-    if (!recipient.dr_session) {
-        throw RuaError("DR session not initialized - AKE must complete first");
-    }
+    ensure_dr_session(recipient);
     
     if (!caller_msg.is_rua_request()) {
         throw RuaError("RuaResponse can only be called on RuaRequest message");
@@ -314,9 +338,7 @@ Bytes rua_response(CallState& recipient, const ProtocolMessage& caller_msg) {
 }
 
 void rua_finalize(CallState& caller, const ProtocolMessage& recipient_msg) {
-    if (!caller.dr_session) {
-        throw RuaError("DR session not initialized - AKE must complete first");
-    }
+    ensure_dr_session(caller);
     
     if (!recipient_msg.is_rua_response()) {
         throw RuaError("RuaFinalize can only be called on RuaResponse message");

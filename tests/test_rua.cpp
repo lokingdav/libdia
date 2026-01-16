@@ -57,7 +57,7 @@ static AkeSessionPair setup_ake_session() {
     
     ake_finalize(*bob, complete_msg);
     
-    // Both parties now have DR sessions and shared key
+    // Both parties now have shared key and learned counterpart keys
     return {std::move(alice), std::move(bob)};
 }
 
@@ -124,7 +124,7 @@ TEST_CASE("rua_request without DR session throws", "[rua]") {
     auto tc = create_client_config("+1234567890", "Alice");
     CallState caller(tc.config, "+1987654321", true);
     
-    // No DR session
+    // Missing shared key / counterpart keys
     REQUIRE_THROWS_AS(rua_request(caller), RuaError);
 }
 
@@ -137,12 +137,13 @@ TEST_CASE("Complete RUA flow", "[rua]") {
     REQUIRE(!alice.shared_key.empty());
     REQUIRE(!bob.shared_key.empty());
     REQUIRE(alice.shared_key == bob.shared_key);
-    REQUIRE(alice.dr_session != nullptr);
-    REQUIRE(bob.dr_session != nullptr);
+    REQUIRE(alice.dr_session == nullptr);
+    REQUIRE(bob.dr_session == nullptr);
     
     // Step 1: Alice creates RuaRequest
     Bytes request_bytes = rua_request(alice);
     REQUIRE(!request_bytes.empty());
+    REQUIRE(alice.dr_session != nullptr);
     
     ProtocolMessage request_msg = ProtocolMessage::deserialize(request_bytes);
     REQUIRE(request_msg.is_rua_request());
@@ -154,6 +155,7 @@ TEST_CASE("Complete RUA flow", "[rua]") {
     // Step 2: Bob processes RuaRequest and creates RuaResponse
     Bytes response_bytes = rua_response(bob, request_msg);
     REQUIRE(!response_bytes.empty());
+    REQUIRE(bob.dr_session != nullptr);
     
     ProtocolMessage response_msg = ProtocolMessage::deserialize(response_bytes);
     REQUIRE(response_msg.is_rua_response());
@@ -206,6 +208,14 @@ TEST_CASE("RUA request includes call reason", "[rua]") {
     ProtocolMessage request_msg = ProtocolMessage::deserialize(request_bytes);
     
     // Decode and check reason
+    // Ensure Bob's DR session is initialized (recipient role)
+    if (!bob.dr_session) {
+        bob.dr_session = doubleratchet::DrSession::init_as_recipient(
+            bob.shared_key,
+            bob.config.dr_private_key,
+            bob.config.dr_public_key
+        );
+    }
     RuaMessage rua_msg = decode_dr_rua_payload(request_msg, *bob.dr_session);
     REQUIRE(rua_msg.reason == "Test Call Reason");
 }
