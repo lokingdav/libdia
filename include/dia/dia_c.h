@@ -100,6 +100,16 @@ void dia_free_oda_verification(dia_oda_verification_t* info);
  */
 int dia_bench_protocol_csv(int samples, int iters_override, char** out);
 
+/**
+ * Run role-aggregated protocol benchmarks and return results as CSV.
+ * Includes bytes sent/received for each role.
+ * Caller must free returned string with dia_free_string().
+ *
+ * @param samples        Number of timing samples per case (must be >= 1).
+ * @param iters_override If > 0, overrides each case's internal iteration count.
+ */
+int dia_bench_protocol_role_csv(int samples, int iters_override, char** out);
+
 /*==============================================================================
  * Config API
  *============================================================================*/

@@ -28,6 +28,9 @@ object LibDia {
     /** Run protocol-operation benchmarks and return results as CSV. */
     external fun benchProtocolCsv(samples: Int, itersOverride: Int): String
 
+    /** Run role-aggregated protocol benchmarks and return results as CSV. */
+    external fun benchProtocolRoleCsv(samples: Int, itersOverride: Int): String
+
     // ===================== Config =====================
     /** Parse a Config from environment variable format string. Returns native handle. */
     external fun configFromEnv(envContent: String): Long

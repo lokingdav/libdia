@@ -80,6 +80,21 @@ static jstring native_benchProtocolCsv(JNIEnv* env, jclass, jint samples, jint i
     return result;
 }
 
+static jstring native_benchProtocolRoleCsv(JNIEnv* env, jclass, jint samples, jint itersOverride) {
+    if (samples < 1) {
+        throwIllegalArg(env, "samples must be >= 1");
+        return nullptr;
+    }
+
+    char* out = nullptr;
+    int rc = dia_bench_protocol_role_csv(static_cast<int>(samples), static_cast<int>(itersOverride), &out);
+    if (!rcIsOk(env, "dia_bench_protocol_role_csv", rc)) return nullptr;
+
+    jstring result = env->NewStringUTF(out ? out : "");
+    dia_free_string(out);
+    return result;
+}
+
 /* ========================== Config API ==================================== */
 
 static jlong native_configFromEnv(JNIEnv* env, jclass, jstring jEnvContent) {
@@ -863,6 +878,7 @@ static jboolean native_verifyTicket(JNIEnv* env, jclass, jbyteArray jTicket, jby
 static JNINativeMethod gMethods[] = {
     // Benchmarks
     { "benchProtocolCsv", "(II)Ljava/lang/String;",   (void*)native_benchProtocolCsv },
+    { "benchProtocolRoleCsv", "(II)Ljava/lang/String;",   (void*)native_benchProtocolRoleCsv },
 
     // Config
     { "configFromEnv",    "(Ljava/lang/String;)J",          (void*)native_configFromEnv },

@@ -100,6 +100,25 @@ func BenchProtocolCSV(samples, itersOverride int) (string, error) {
 	return C.GoString(out), nil
 }
 
+// BenchProtocolRoleCSV runs the role-aggregated protocol benchmarks and returns the CSV string.
+//
+// The CSV includes bytes sent/received per role.
+// samples must be >= 1. If itersOverride > 0, it overrides each case's default iteration count.
+func BenchProtocolRoleCSV(samples, itersOverride int) (string, error) {
+	ensureInit()
+	if samples < 1 {
+		return "", ErrInvalidArg
+	}
+
+	var out *C.char
+	rc := C.dia_bench_protocol_role_csv(C.int(samples), C.int(itersOverride), &out)
+	if err := rcErr(rc); err != nil {
+		return "", err
+	}
+	defer C.dia_free_string(out)
+	return C.GoString(out), nil
+}
+
 // ============================================================================
 // Config - Client configuration for DIA protocol
 // ============================================================================

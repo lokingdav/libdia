@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cmath>
 #include <iomanip>
+#include <unordered_map>
 #include <numeric>
 #include <sstream>
 #include <memory>
@@ -85,6 +86,11 @@ static Stats compute_stats_ms(const std::vector<double>& samples_ms) {
     return s;
 }
 
+struct RawBench {
+    BenchResult summary;
+    std::vector<double> samples_ms;
+};
+
 static std::string csv_escape(const std::string& v) {
     const bool needs_quotes =
         (v.find(',') != std::string::npos) || (v.find('"') != std::string::npos) ||
@@ -149,6 +155,106 @@ static ServerConfig make_server_config() {
     return cfg;
 }
 
+struct CallPair {
+    std::unique_ptr<CallState> alice;
+    std::unique_ptr<CallState> bob;
+};
+
+static CallPair make_call_pair(const ClientConfig& alice_cfg, const ClientConfig& bob_cfg);
+static void set_fixed_ts(CallState& alice, CallState& bob, const std::string& ts);
+static void run_rua_handshake(CallState& alice, CallState& bob);
+
+struct WireBytes {
+    std::size_t enrollment_req = 0;
+    std::size_t enrollment_resp = 0;
+
+    std::size_t ake_req = 0;
+    std::size_t ake_resp = 0;
+    std::size_t ake_complete = 0;
+
+    std::size_t rua_req = 0;
+    std::size_t rua_resp = 0;
+
+    std::size_t oda_req = 0;
+    std::size_t oda_resp = 0;
+
+    std::size_t token_blinded = 0;
+    std::size_t token_evaluated = 0;
+};
+
+static WireBytes compute_wire_bytes(const Fixtures& fx) {
+    WireBytes b;
+
+    // Enrollment wire sizes (serialized request/response).
+    {
+        b.enrollment_req = fx.enrollment_request.serialize().size();
+        b.enrollment_resp = fx.enrollment_response.serialize().size();
+    }
+
+    // Access token minting roundtrip sizes.
+    {
+        auto bt = accesstoken::blind_access_token();
+        b.token_blinded = bt.blinded.size();
+        b.token_evaluated = accesstoken::evaluate_blinded_access_token(fx.server.at_private_key, bt.blinded).size();
+    }
+
+    // AKE message sizes.
+    {
+        auto pair = make_call_pair(fx.alice_cfg, fx.bob_cfg);
+        set_fixed_ts(*pair.alice, *pair.bob, fx.ts);
+
+        init_ake(*pair.alice);
+        init_ake(*pair.bob);
+
+        Bytes req_bytes = ake_request(*pair.alice);
+        b.ake_req = req_bytes.size();
+        ProtocolMessage req_msg = ProtocolMessage::deserialize(req_bytes);
+
+        Bytes resp_bytes = ake_response(*pair.bob, req_msg);
+        b.ake_resp = resp_bytes.size();
+        ProtocolMessage resp_msg = ProtocolMessage::deserialize(resp_bytes);
+
+        Bytes complete_bytes = ake_complete(*pair.alice, resp_msg);
+        b.ake_complete = complete_bytes.size();
+    }
+
+    // RUA message sizes (cached peer state = subsequent call flow).
+    {
+        auto pair = make_call_pair(fx.alice_cfg, fx.bob_cfg);
+        set_fixed_ts(*pair.alice, *pair.bob, fx.ts);
+
+        pair.alice->apply_peer_session(fx.alice_peer);
+        pair.bob->apply_peer_session(fx.bob_peer);
+
+        Bytes req_bytes = rua_request(*pair.alice);
+        b.rua_req = req_bytes.size();
+        ProtocolMessage req_msg = ProtocolMessage::deserialize(req_bytes);
+
+        Bytes resp_bytes = rua_response(*pair.bob, req_msg);
+        b.rua_resp = resp_bytes.size();
+    }
+
+    // ODA message sizes (after RUA established).
+    {
+        auto pair = make_call_pair(fx.alice_cfg, fx.bob_cfg);
+        set_fixed_ts(*pair.alice, *pair.bob, fx.ts);
+
+        pair.alice->apply_peer_session(fx.alice_peer);
+        pair.bob->apply_peer_session(fx.bob_peer);
+        run_rua_handshake(*pair.alice, *pair.bob);
+
+        std::vector<std::string> attrs = {"name"};
+        Bytes req_bytes = oda_request(*pair.alice, attrs);
+        b.oda_req = req_bytes.size();
+        ProtocolMessage req_msg = ProtocolMessage::deserialize(req_bytes);
+
+        Bytes resp_bytes = oda_response(*pair.bob, req_msg);
+        b.oda_resp = resp_bytes.size();
+    }
+
+    return b;
+}
+
 static ClientConfig enroll_client(
     const ServerConfig& server,
     const std::string& phone,
@@ -160,11 +266,6 @@ static ClientConfig enroll_client(
     EnrollmentResponse resp = process_enrollment(server, req);
     return finalize_enrollment(keys, resp, phone, name, logo_url);
 }
-
-struct CallPair {
-    std::unique_ptr<CallState> alice;
-    std::unique_ptr<CallState> bob;
-};
 
 static CallPair make_call_pair(const ClientConfig& alice_cfg, const ClientConfig& bob_cfg) {
     // Create CallStates. Keep ts aligned to simulate a single call.
@@ -486,8 +587,7 @@ static std::shared_ptr<Fixtures> build_fixtures() {
     return fx;
 }
 
-std::vector<BenchCase> make_protocol_benchmarks() {
-    auto fx = build_fixtures();
+static std::vector<BenchCase> make_protocol_benchmarks_with_fixtures(const std::shared_ptr<Fixtures>& fx) {
 
     std::vector<BenchCase> cases;
 
@@ -885,14 +985,17 @@ std::vector<BenchCase> make_protocol_benchmarks() {
     return cases;
 }
 
-std::vector<BenchResult> run_protocol_benchmarks(const BenchOptions& opts) {
-    auto cases = make_protocol_benchmarks();
+std::vector<BenchCase> make_protocol_benchmarks() {
+    return make_protocol_benchmarks_with_fixtures(build_fixtures());
+}
 
+static std::vector<RawBench> run_cases_raw(const std::vector<BenchCase>& cases, const BenchOptions& opts) {
     const int samples = std::max(1, opts.samples);
-    std::vector<BenchResult> results;
-    results.reserve(cases.size());
 
-    for (auto& c : cases) {
+    std::vector<RawBench> out;
+    out.reserve(cases.size());
+
+    for (const auto& c : cases) {
         const int iters = (opts.iters_override > 0) ? opts.iters_override : c.iters;
 
         std::vector<double> per_iter_ms;
@@ -912,15 +1015,150 @@ std::vector<BenchResult> run_protocol_benchmarks(const BenchOptions& opts) {
             per_iter_ms.push_back(elapsed.count() / static_cast<double>(iters));
         }
 
-        BenchResult r;
-        r.name = c.name;
-        r.iters = iters;
-        r.samples = samples;
-        r.stats = compute_stats_ms(per_iter_ms);
-        results.push_back(std::move(r));
+        RawBench rb;
+        rb.summary.name = c.name;
+        rb.summary.iters = iters;
+        rb.summary.samples = samples;
+        rb.samples_ms = std::move(per_iter_ms);
+        rb.summary.stats = compute_stats_ms(rb.samples_ms);
+        out.push_back(std::move(rb));
     }
 
+    return out;
+}
+
+std::vector<BenchResult> run_protocol_benchmarks(const BenchOptions& opts) {
+    auto raw = run_cases_raw(make_protocol_benchmarks(), opts);
+    std::vector<BenchResult> results;
+    results.reserve(raw.size());
+    for (auto& r : raw) {
+        results.push_back(std::move(r.summary));
+    }
     return results;
+}
+
+std::vector<RoleBenchResult> run_protocol_role_benchmarks(const BenchOptions& opts) {
+    auto fx = build_fixtures();
+    WireBytes wb = compute_wire_bytes(*fx);
+
+    const auto cases = make_protocol_benchmarks_with_fixtures(fx);
+    const auto raw = run_cases_raw(cases, opts);
+
+    // Map per-op name -> sample vector.
+    std::unordered_map<std::string, std::vector<double>> by_name;
+    by_name.reserve(raw.size());
+    for (const auto& r : raw) {
+        by_name.emplace(r.summary.name, r.samples_ms);
+    }
+
+    const int samples = std::max(1, opts.samples);
+    auto sum_samples = [samples, &by_name](const std::vector<std::string>& names) {
+        std::vector<double> out(static_cast<std::size_t>(samples), 0.0);
+        for (const auto& n : names) {
+            auto it = by_name.find(n);
+            if (it == by_name.end()) {
+                throw std::runtime_error("role benchmarks: missing component case: " + n);
+            }
+            const auto& v = it->second;
+            if (static_cast<int>(v.size()) != samples) {
+                throw std::runtime_error("role benchmarks: sample count mismatch for case: " + n);
+            }
+            for (int i = 0; i < samples; ++i) {
+                out[static_cast<std::size_t>(i)] += v[static_cast<std::size_t>(i)];
+            }
+        }
+        return out;
+    };
+
+    auto join_components = [](const std::vector<std::string>& names) {
+        std::ostringstream oss;
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            if (i) oss << "+";
+            oss << names[i];
+        }
+        return oss.str();
+    };
+
+    // Define role-level aggregations.
+    struct RoleDef {
+        std::string name;
+        std::vector<std::string> components;
+        std::size_t bytes_sent = 0;
+        std::size_t bytes_received = 0;
+    };
+
+    const std::vector<RoleDef> roles = {
+        {
+            "AKE caller (request+complete)",
+            {"AKE caller: ake_request", "AKE caller: ake_complete"},
+            wb.ake_req + wb.ake_complete,
+            wb.ake_resp,
+        },
+        {
+            "AKE recipient (response+finalize)",
+            {"AKE recipient: ake_response", "AKE recipient: ake_finalize"},
+            wb.ake_resp,
+            wb.ake_req + wb.ake_complete,
+        },
+        {
+            "RUA caller (request+finalize, cached peer)",
+            {"RUA caller: rua_request (cached peer state)", "RUA caller: rua_finalize (cached peer state)"},
+            wb.rua_req,
+            wb.rua_resp,
+        },
+        {
+            "RUA recipient (response, cached peer)",
+            {"RUA recipient: rua_response (cached peer state)"},
+            wb.rua_resp,
+            wb.rua_req,
+        },
+        {
+            "ODA verifier (request+verify)",
+            {"ODA verifier: oda_request (after RUA)", "ODA verifier: oda_verify"},
+            wb.oda_req,
+            wb.oda_resp,
+        },
+        {
+            "ODA prover (response)",
+            {"ODA prover: oda_response"},
+            wb.oda_resp,
+            wb.oda_req,
+        },
+        {
+            "AccessToken client (blind+finalize)",
+            {"AccessToken client: blind (count=1)", "AccessToken client: finalize (count=1)"},
+            wb.token_blinded,
+            wb.token_evaluated,
+        },
+        {
+            "AccessToken server (evaluate)",
+            {"AccessToken server: evaluate (count=1)"},
+            wb.token_evaluated,
+            wb.token_blinded,
+        },
+        {
+            "AccessToken verifier (verify)",
+            {"AccessToken verifier: verify (count=1)"},
+            0,
+            0,
+        },
+    };
+
+    std::vector<RoleBenchResult> out;
+    out.reserve(roles.size());
+    for (const auto& role : roles) {
+        std::vector<double> combined = sum_samples(role.components);
+
+        RoleBenchResult r;
+        r.name = role.name;
+        r.samples = samples;
+        r.bytes_sent = role.bytes_sent;
+        r.bytes_received = role.bytes_received;
+        r.stats = compute_stats_ms(combined);
+        r.components = join_components(role.components);
+        out.push_back(std::move(r));
+    }
+    return out;
 }
 
 std::string protocol_benchmarks_to_csv(const std::vector<BenchResult>& results) {
@@ -942,8 +1180,33 @@ std::string protocol_benchmarks_to_csv(const std::vector<BenchResult>& results) 
     return out.str();
 }
 
+std::string protocol_role_benchmarks_to_csv(const std::vector<RoleBenchResult>& results) {
+    std::ostringstream out;
+    out << "name,samples,bytes_sent,bytes_received,min_ms,max_ms,mean_ms,median_ms,stddev_ms,mad_ms,components\n";
+    out << std::fixed << std::setprecision(9);
+    for (const auto& r : results) {
+        out << csv_escape(r.name) << ','
+            << r.samples << ','
+            << r.bytes_sent << ','
+            << r.bytes_received << ','
+            << r.stats.min_ms << ','
+            << r.stats.max_ms << ','
+            << r.stats.mean_ms << ','
+            << r.stats.median_ms << ','
+            << r.stats.stddev_ms << ','
+            << r.stats.mad_ms << ','
+            << csv_escape(r.components)
+            << '\n';
+    }
+    return out.str();
+}
+
 std::string run_protocol_benchmarks_csv(const BenchOptions& opts) {
     return protocol_benchmarks_to_csv(run_protocol_benchmarks(opts));
+}
+
+std::string run_protocol_role_benchmarks_csv(const BenchOptions& opts) {
+    return protocol_role_benchmarks_to_csv(run_protocol_role_benchmarks(opts));
 }
 
 } // namespace bench

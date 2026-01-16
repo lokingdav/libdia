@@ -41,17 +41,36 @@ struct BenchResult {
     Stats stats;
 };
 
+struct RoleBenchResult {
+    std::string name;
+    int samples = 0;
+    std::size_t bytes_sent = 0;
+    std::size_t bytes_received = 0;
+    Stats stats;
+    // Human-readable list of included per-op components.
+    std::string components;
+};
+
 // Returns all protocol-operation benchmark cases.
 std::vector<BenchCase> make_protocol_benchmarks();
 
 // Runs all protocol benchmarks and returns results with summary statistics.
 std::vector<BenchResult> run_protocol_benchmarks(const BenchOptions& opts = {});
 
+// Runs role-aggregated protocol benchmarks (e.g. AKE caller = request+complete).
+std::vector<RoleBenchResult> run_protocol_role_benchmarks(const BenchOptions& opts = {});
+
 // Format results as CSV string.
 std::string protocol_benchmarks_to_csv(const std::vector<BenchResult>& results);
 
+// Format role-aggregated results as CSV string.
+std::string protocol_role_benchmarks_to_csv(const std::vector<RoleBenchResult>& results);
+
 // Convenience: run + CSV.
 std::string run_protocol_benchmarks_csv(const BenchOptions& opts = {});
+
+// Convenience: run role benchmarks + CSV.
+std::string run_protocol_role_benchmarks_csv(const BenchOptions& opts = {});
 
 } // namespace bench
 } // namespace protocol
