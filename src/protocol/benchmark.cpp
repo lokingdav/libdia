@@ -1,6 +1,7 @@
 #include "benchmark.hpp"
 
 #include "ake.hpp"
+#include "accesstoken.hpp"
 #include "callstate.hpp"
 #include "enrollment.hpp"
 #include "oda.hpp"
@@ -528,6 +529,102 @@ std::vector<BenchCase> make_protocol_benchmarks() {
             );
         },
     });
+
+    // Access token minting (OPRF) operations
+    {
+        cases.push_back(BenchCase{
+            "AccessToken client: blind (count=1)",
+            120,
+            {},
+            []() {
+                (void)accesstoken::blind_access_token();
+            },
+        });
+    }
+    {
+        struct State {
+            Bytes at_sk;
+            std::vector<Bytes> blinded;
+            std::size_t idx = 0;
+        };
+        auto st = std::make_shared<State>();
+        cases.push_back(BenchCase{
+            "AccessToken server: evaluate (count=1)",
+            2000,
+            [fx, st](int n) {
+                st->at_sk = fx->server.at_private_key;
+                st->blinded.clear();
+                st->blinded.reserve(static_cast<std::size_t>(n));
+                auto toks = accesstoken::blind_access_tokens(static_cast<std::size_t>(n));
+                for (auto& t : toks) {
+                    st->blinded.push_back(std::move(t.blinded));
+                }
+                st->idx = 0;
+            },
+            [st]() {
+                const Bytes& b = st->blinded[st->idx++];
+                (void)accesstoken::evaluate_blinded_access_token(st->at_sk, b);
+            },
+        });
+    }
+    {
+        struct State {
+            Bytes at_sk;
+            Bytes vk;
+            std::vector<accesstoken::BlindedAccessToken> blinded;
+            std::vector<Bytes> evaluated;
+            std::size_t idx = 0;
+        };
+        auto st = std::make_shared<State>();
+        cases.push_back(BenchCase{
+            "AccessToken client: finalize (count=1)",
+            600,
+            [fx, st](int n) {
+                st->at_sk = fx->server.at_private_key;
+                st->vk = fx->server.at_public_key;
+                st->blinded = accesstoken::blind_access_tokens(static_cast<std::size_t>(n));
+                st->evaluated.clear();
+                st->evaluated.reserve(st->blinded.size());
+                for (const auto& bt : st->blinded) {
+                    st->evaluated.push_back(accesstoken::evaluate_blinded_access_token(st->at_sk, bt.blinded));
+                }
+                st->idx = 0;
+            },
+            [st]() {
+                const auto& bt = st->blinded[st->idx];
+                const auto& ev = st->evaluated[st->idx];
+                st->idx++;
+                (void)accesstoken::finalize_access_token(bt, ev);
+            },
+        });
+    }
+    {
+        struct State {
+            Bytes vk;
+            std::vector<accesstoken::AccessToken> tokens;
+            std::size_t idx = 0;
+        };
+        auto st = std::make_shared<State>();
+        cases.push_back(BenchCase{
+            "AccessToken verifier: verify (count=1)",
+            120,
+            [fx, st](int n) {
+                st->vk = fx->server.at_public_key;
+                auto blinded = accesstoken::blind_access_tokens(static_cast<std::size_t>(n));
+                st->tokens.clear();
+                st->tokens.reserve(blinded.size());
+                for (const auto& bt : blinded) {
+                    Bytes ev = accesstoken::evaluate_blinded_access_token(fx->server.at_private_key, bt.blinded);
+                    st->tokens.push_back(accesstoken::finalize_access_token(bt, ev));
+                }
+                st->idx = 0;
+            },
+            [st]() {
+                const auto& t = st->tokens[st->idx++];
+                (void)accesstoken::verify_access_token(t, st->vk);
+            },
+        });
+    }
 
     // AKE operations
     {

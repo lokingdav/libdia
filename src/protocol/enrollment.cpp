@@ -1,6 +1,5 @@
 #include "enrollment.hpp"
 #include "../helpers.hpp"
-#include "../crypto/voprf.hpp"
 #include "../crypto/bbs.hpp"
 #include "../crypto/amf.hpp"
 
@@ -14,30 +13,7 @@ namespace protocol {
 using namespace dia::utils;
 using ecgroup::Bytes;
 using ecgroup::Scalar;
-using ecgroup::G1Point;
 using ecgroup::G2Point;
-
-// -----------------------------------------------------------------------------
-// Ticket implementation
-// -----------------------------------------------------------------------------
-
-Bytes Ticket::to_bytes() const {
-    Bytes result;
-    result.reserve(t1.size() + t2.size());
-    result.insert(result.end(), t1.begin(), t1.end());
-    result.insert(result.end(), t2.begin(), t2.end());
-    return result;
-}
-
-Ticket Ticket::from_bytes(const Bytes& data) {
-    if (data.size() < 32) {
-        throw EnrollmentError("Invalid ticket data: too short");
-    }
-    Ticket t;
-    t.t1 = Bytes(data.begin(), data.begin() + 32);
-    t.t2 = Bytes(data.begin() + 32, data.end());
-    return t;
-}
 
 // -----------------------------------------------------------------------------
 // EnrollmentRequest serialization
@@ -185,17 +161,11 @@ bool verify_ticket(
     const Ticket& ticket,
     const Bytes& verification_key)
 {
-    // Parse the verification key (VOPRF public key)
-    G2Point vk = G2Point::from_bytes(verification_key);
-    
-    // Parse the ticket output (unblinded VOPRF result)
-    G1Point output = G1Point::from_bytes(ticket.t2);
-    
-    // Convert ticket input to string
-    std::string input_str(ticket.t1.begin(), ticket.t1.end());
-    
-    // Verify using VOPRF
-    return voprf::verify(input_str, output, vk);
+    try {
+        return accesstoken::verify_access_token(ticket, verification_key);
+    } catch (const std::exception& e) {
+        throw EnrollmentError(std::string("verify_ticket failed: ") + e.what());
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -203,60 +173,22 @@ bool verify_ticket(
 // -----------------------------------------------------------------------------
 
 std::vector<BlindedTicket> generate_blinded_tickets(std::size_t count) {
-    std::vector<BlindedTicket> tickets;
-    tickets.reserve(count);
-    
-    for (std::size_t i = 0; i < count; ++i) {
-        // Generate random input (use VOPRF keygen to get random scalar as input)
-        voprf::KeyPair temp_kp = voprf::keygen();
-        Bytes input = temp_kp.sk.to_bytes();
-        
-        // Convert input to string for blind function
-        std::string input_str(input.begin(), input.end());
-        
-        // Blind the input
-        auto [blinded_point, blind] = voprf::blind(input_str);
-        
-        BlindedTicket ticket;
-        ticket.input = input;
-        ticket.blinded = blinded_point.to_bytes();
-        ticket.blind = blind.to_bytes();
-        
-        tickets.push_back(std::move(ticket));
+    try {
+        return accesstoken::blind_access_tokens(count);
+    } catch (const std::exception& e) {
+        throw EnrollmentError(std::string("generate_blinded_tickets failed: ") + e.what());
     }
-    
-    return tickets;
 }
 
 std::vector<Ticket> finalize_tickets(
     const std::vector<BlindedTicket>& blinded,
     const std::vector<Bytes>& evaluated)
 {
-    if (blinded.size() != evaluated.size()) {
-        throw EnrollmentError("Mismatched blinded and evaluated ticket counts");
+    try {
+        return accesstoken::finalize_access_tokens(blinded, evaluated);
+    } catch (const std::exception& e) {
+        throw EnrollmentError(std::string("finalize_tickets failed: ") + e.what());
     }
-    
-    std::vector<Ticket> tickets;
-    tickets.reserve(blinded.size());
-    
-    for (std::size_t i = 0; i < blinded.size(); ++i) {
-        // Parse evaluated point
-        G1Point eval_point = G1Point::from_bytes(evaluated[i]);
-        
-        // Parse blind
-        Scalar blind = Scalar::from_bytes(blinded[i].blind);
-        
-        // Unblind
-        G1Point output = voprf::unblind(eval_point, blind);
-        
-        Ticket ticket;
-        ticket.t1 = blinded[i].input;
-        ticket.t2 = output.to_bytes();
-        
-        tickets.push_back(std::move(ticket));
-    }
-    
-    return tickets;
 }
 
 // -----------------------------------------------------------------------------
@@ -450,17 +382,15 @@ EnrollmentResponse process_enrollment(
     response.ra_public_key = config.ci_public_key;
     response.amf_moderator_pk = config.amf_public_key;
     response.ticket_verify_key = config.at_public_key;
-    
-    // Evaluate tickets
-    Scalar at_sk = Scalar::from_bytes(config.at_private_key);
-    for (const auto& blinded : request.blinded_tickets) {
-        // Parse blinded point
-        G1Point blinded_point = G1Point::from_bytes(blinded);
-        
-        // Evaluate: multiply by private key
-        G1Point evaluated = G1Point::mul(blinded_point, at_sk);
-        
-        response.evaluated_tickets.push_back(evaluated.to_bytes());
+
+    // Evaluate tickets (access token minting)
+    try {
+        response.evaluated_tickets = accesstoken::evaluate_blinded_access_tokens(
+            config.at_private_key,
+            request.blinded_tickets
+        );
+    } catch (const std::exception& e) {
+        throw EnrollmentError(std::string("ticket evaluation failed: ") + e.what());
     }
     
     return response;

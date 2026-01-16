@@ -3,10 +3,10 @@
 
 #include "../crypto/ecgroup.hpp"
 #include "../crypto/bbs.hpp"
-#include "../crypto/voprf.hpp"
 #include "../crypto/pke.hpp"
 #include "../crypto/doubleratchet.hpp"
 #include "callstate.hpp"
+#include "accesstoken.hpp"
 
 #include <string>
 #include <vector>
@@ -26,24 +26,10 @@ public:
 };
 
 // -----------------------------------------------------------------------------
-// Blinded ticket (client keeps blind factor for finalization)
+// Ticket types (enrollment naming) - implemented by the access token module.
 // -----------------------------------------------------------------------------
-struct BlindedTicket {
-    Bytes input;      // Original random input
-    Bytes blinded;    // Blinded point (sent to server)
-    Bytes blind;      // Blind factor (kept secret by client)
-};
-
-// -----------------------------------------------------------------------------
-// Finalized ticket (after server evaluation)
-// -----------------------------------------------------------------------------
-struct Ticket {
-    Bytes t1;  // Original input
-    Bytes t2;  // Server-evaluated output (unblinded)
-    
-    Bytes to_bytes() const;
-    static Ticket from_bytes(const Bytes& data);
-};
+using BlindedTicket = accesstoken::BlindedAccessToken;
+using Ticket = accesstoken::AccessToken;
 
 // -----------------------------------------------------------------------------
 // Client-side keys generated during enrollment
