@@ -118,6 +118,15 @@ struct ServerConfig {
 };
 
 // -----------------------------------------------------------------------------
+// Delegation (owner-side BBS signature)
+// -----------------------------------------------------------------------------
+
+struct Delegation {
+    Bytes expiration;  // 8-byte big-endian timestamp (same format as make_expiration)
+    Bytes signature;   // BBS signature bytes
+};
+
+// -----------------------------------------------------------------------------
 // Client-side functions
 // -----------------------------------------------------------------------------
 
@@ -157,6 +166,19 @@ std::vector<Ticket> finalize_tickets(
 EnrollmentResponse process_enrollment(
     const ServerConfig& config,
     const EnrollmentRequest& request
+);
+
+// Create a delegation signature for a delegate.
+// Signs two BBS messages:
+//   m1 = H(delegate_pk, expiration, telephone_number)
+//   m2 = rules
+// Where rules is a length-prefixed serialization of rule strings.
+Delegation create_delegation(
+    const Bytes& signer_bbs_sk,
+    const Bytes& delegate_pk,
+    int days_valid,
+    const std::string& telephone_number,
+    const std::vector<std::string>& rules = {}
 );
 
 // Generate expiration timestamp (days from now)

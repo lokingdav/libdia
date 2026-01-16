@@ -169,6 +169,47 @@ bool verify_ticket(
 }
 
 // -----------------------------------------------------------------------------
+// Delegation
+// -----------------------------------------------------------------------------
+
+Delegation create_delegation(
+    const Bytes& signer_bbs_sk,
+    const Bytes& delegate_pk,
+    int days_valid,
+    const std::string& telephone_number,
+    const std::vector<std::string>& rules)
+{
+    try {
+        bbs::Params bbs_params = bbs::Params::Default();
+
+        Delegation out;
+        out.expiration = make_expiration(days_valid);
+
+        // m1 = H(pk, ex, tn)
+        Bytes tn_bytes = to_bytes(telephone_number);
+        Bytes message1 = hash_all({delegate_pk, out.expiration, tn_bytes});
+        Scalar m1 = Scalar::hash_to_scalar(message1);
+
+        // m2 = rules (length-prefixed serialization)
+        Bytes rules_ser;
+        append_u32_be(rules_ser, static_cast<uint32_t>(rules.size()));
+        for (const auto& r : rules) {
+            append_lp(rules_ser, to_bytes(r));
+        }
+        Scalar m2 = Scalar::hash_to_scalar(rules_ser);
+
+        std::vector<Scalar> msgs = {m1, m2};
+        Scalar sk = Scalar::from_bytes(signer_bbs_sk);
+        bbs::Signature sig = bbs::sign(bbs_params, sk, msgs);
+        out.signature = sig.to_bytes();
+
+        return out;
+    } catch (const std::exception& e) {
+        throw EnrollmentError(std::string("create_delegation failed: ") + e.what());
+    }
+}
+
+// -----------------------------------------------------------------------------
 // Ticket generation
 // -----------------------------------------------------------------------------
 

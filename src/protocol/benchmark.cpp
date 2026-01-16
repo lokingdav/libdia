@@ -180,6 +180,8 @@ struct WireBytes {
 
     std::size_t token_blinded = 0;
     std::size_t token_evaluated = 0;
+
+    std::size_t delegation_cert = 0;
 };
 
 static WireBytes compute_wire_bytes(const Fixtures& fx) {
@@ -196,6 +198,18 @@ static WireBytes compute_wire_bytes(const Fixtures& fx) {
         auto bt = accesstoken::blind_access_token();
         b.token_blinded = bt.blinded.size();
         b.token_evaluated = accesstoken::evaluate_blinded_access_token(fx.server.at_private_key, bt.blinded).size();
+    }
+
+    // Delegation certificate size (expiration + signature).
+    {
+        auto d = create_delegation(
+            fx.server.ci_private_key,
+            fx.enrollment_keys.subscriber_public_key,
+            30,
+            fx.enrollment_request.telephone_number,
+            {}
+        );
+        b.delegation_cert = d.expiration.size() + d.signature.size();
     }
 
     // AKE message sizes.
@@ -626,6 +640,22 @@ static std::vector<BenchCase> make_protocol_benchmarks_with_fixtures(const std::
                 "+1234567890",
                 "Alice",
                 "https://example.com/logo.png"
+            );
+        },
+    });
+
+    // Delegation (owner-side signature)
+    cases.push_back(BenchCase{
+        "Delegation owner: sign (rules=0)",
+        200,
+        {},
+        [fx]() {
+            (void)create_delegation(
+                fx->server.ci_private_key,
+                fx->enrollment_keys.subscriber_public_key,
+                30,
+                fx->enrollment_request.telephone_number,
+                {}
             );
         },
     });
@@ -1140,6 +1170,12 @@ std::vector<RoleBenchResult> run_protocol_role_benchmarks(const BenchOptions& op
             "AccessToken verifier (verify)",
             {"AccessToken verifier: verify (count=1)"},
             0,
+            0,
+        },
+        {
+            "Delegation owner (sign)",
+            {"Delegation owner: sign (rules=0)"},
+            wb.delegation_cert,
             0,
         },
     };
