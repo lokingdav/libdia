@@ -318,7 +318,9 @@ static void native_callStateApplyPeerSession(JNIEnv* env, jclass, jlong handle, 
     }
     auto state = reinterpret_cast<dia_callstate_t*>(handle);
     auto data = getBytes(env, jData);
-    rcIsOk(env, "dia_callstate_apply_peer_session", dia_callstate_apply_peer_session(state, data.ptr, data.len));
+    const unsigned char* p = data.empty() ? nullptr : data.data();
+    rcIsOk(env, "dia_callstate_apply_peer_session",
+           dia_callstate_apply_peer_session(state, p, static_cast<size_t>(data.size())));
 }
 
 /* ========================== AKE Protocol ================================== */
