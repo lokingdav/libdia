@@ -30,6 +30,7 @@ struct Stats {
     double max_ms = 0.0;
     double mean_ms = 0.0;
     double median_ms = 0.0;
+    double p99_ms = 0.0;
     double stddev_ms = 0.0;
     double mad_ms = 0.0;
 };

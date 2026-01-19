@@ -49,8 +49,25 @@ static double median_of_sorted(const std::vector<double>& sorted) {
     if ((n % 2) == 1) {
         return sorted[mid];
     }
-    return 0.5 * (sorted[mid - 1] + sorted[mid]);
+        return 0.5 * (sorted[mid - 1] + sorted[mid]);
 }
+
+    static double percentile_of_sorted_nearest_rank(const std::vector<double>& sorted, double p) {
+        if (sorted.empty()) {
+            return 0.0;
+        }
+
+        if (p <= 0.0) {
+            return sorted.front();
+        }
+        if (p >= 1.0) {
+            return sorted.back();
+        }
+
+        const double n = static_cast<double>(sorted.size());
+        const std::size_t idx = static_cast<std::size_t>(std::ceil(p * n)) - 1;
+        return sorted[std::min<std::size_t>(idx, sorted.size() - 1)];
+    }
 
 static Stats compute_stats_ms(const std::vector<double>& samples_ms) {
     Stats s;
@@ -67,6 +84,7 @@ static Stats compute_stats_ms(const std::vector<double>& samples_ms) {
     const double sum = std::accumulate(sorted.begin(), sorted.end(), 0.0);
     s.mean_ms = sum / static_cast<double>(sorted.size());
     s.median_ms = median_of_sorted(sorted);
+        s.p99_ms = percentile_of_sorted_nearest_rank(sorted, 0.99);
 
     double var = 0.0;
     for (double x : sorted) {
@@ -1119,61 +1137,55 @@ std::vector<RoleBenchResult> run_protocol_role_benchmarks(const BenchOptions& op
 
     const std::vector<RoleDef> roles = {
         {
-            "AKE caller (request+complete)",
+            "AKE caller",
             {"AKE caller: ake_request", "AKE caller: ake_complete"},
             wb.ake_req + wb.ake_complete,
             wb.ake_resp,
         },
         {
-            "AKE recipient (response+finalize)",
+            "AKE recipient",
             {"AKE recipient: ake_response", "AKE recipient: ake_finalize"},
             wb.ake_resp,
             wb.ake_req + wb.ake_complete,
         },
         {
-            "RUA caller (request+finalize, cached peer)",
+            "RUA caller",
             {"RUA caller: rua_request (cached peer state)", "RUA caller: rua_finalize (cached peer state)"},
             wb.rua_req,
             wb.rua_resp,
         },
         {
-            "RUA recipient (response, cached peer)",
+            "RUA recipient",
             {"RUA recipient: rua_response (cached peer state)"},
             wb.rua_resp,
             wb.rua_req,
         },
         {
-            "ODA verifier (request+verify)",
+            "ODA verifier",
             {"ODA verifier: oda_request (after RUA)", "ODA verifier: oda_verify"},
             wb.oda_req,
             wb.oda_resp,
         },
         {
-            "ODA prover (response)",
+            "ODA prover",
             {"ODA prover: oda_response"},
             wb.oda_resp,
             wb.oda_req,
         },
         {
-            "AccessToken client (blind+finalize)",
-            {"AccessToken client: blind (count=1)", "AccessToken client: finalize (count=1)"},
+            "AccessToken client",
+            {"AccessToken client: blind (count=1)", "AccessToken client: finalize (count=1)", "AccessToken verifier: verify (count=1)"},
             wb.token_blinded,
             wb.token_evaluated,
         },
         {
-            "AccessToken server (evaluate)",
+            "AccessToken server",
             {"AccessToken server: evaluate (count=1)"},
             wb.token_evaluated,
             wb.token_blinded,
         },
         {
-            "AccessToken verifier (verify)",
-            {"AccessToken verifier: verify (count=1)"},
-            0,
-            0,
-        },
-        {
-            "Delegation owner (sign)",
+            "Delegation owner",
             {"Delegation owner: sign (rules=0)"},
             wb.delegation_cert,
             0,
@@ -1199,7 +1211,7 @@ std::vector<RoleBenchResult> run_protocol_role_benchmarks(const BenchOptions& op
 
 std::string protocol_benchmarks_to_csv(const std::vector<BenchResult>& results) {
     std::ostringstream out;
-    out << "name,iters,samples,min_ms,max_ms,mean_ms,median_ms,stddev_ms,mad_ms\n";
+        out << "name,iters,samples,min_ms,max_ms,mean_ms,median_ms,p99_ms,stddev_ms,mad_ms\n";
     out << std::fixed << std::setprecision(9);
     for (const auto& r : results) {
         out << csv_escape(r.name) << ','
@@ -1209,6 +1221,7 @@ std::string protocol_benchmarks_to_csv(const std::vector<BenchResult>& results) 
             << r.stats.max_ms << ','
             << r.stats.mean_ms << ','
             << r.stats.median_ms << ','
+                << r.stats.p99_ms << ','
             << r.stats.stddev_ms << ','
             << r.stats.mad_ms
             << '\n';
@@ -1218,7 +1231,7 @@ std::string protocol_benchmarks_to_csv(const std::vector<BenchResult>& results) 
 
 std::string protocol_role_benchmarks_to_csv(const std::vector<RoleBenchResult>& results) {
     std::ostringstream out;
-    out << "name,samples,bytes_sent,bytes_received,min_ms,max_ms,mean_ms,median_ms,stddev_ms,mad_ms,components\n";
+        out << "name,samples,bytes_sent,bytes_received,min_ms,max_ms,mean_ms,median_ms,p99_ms,stddev_ms,mad_ms,components\n";
     out << std::fixed << std::setprecision(9);
     for (const auto& r : results) {
         out << csv_escape(r.name) << ','
@@ -1229,6 +1242,7 @@ std::string protocol_role_benchmarks_to_csv(const std::vector<RoleBenchResult>& 
             << r.stats.max_ms << ','
             << r.stats.mean_ms << ','
             << r.stats.median_ms << ','
+                << r.stats.p99_ms << ','
             << r.stats.stddev_ms << ','
             << r.stats.mad_ms << ','
             << csv_escape(r.components)
