@@ -1,5 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include "protocol/messages.hpp"
+#include "protocol/accesstoken.hpp"
+#include "crypto/voprf.hpp"
+#include "crypto/ecgroup.hpp"
+#include "helpers.hpp"
 
 TEST_CASE("Protocol Messages", "[protocol][messages]") {
 
@@ -163,6 +167,66 @@ TEST_CASE("Protocol Messages", "[protocol][messages]") {
         REQUIRE(msg.sender_id == "sender789");
         REQUIRE(msg.topic == "topicABC");
         REQUIRE(msg.payload.empty());
+    }
+
+    SECTION("create_message_mac is deterministic and sensitive to data") {
+        protocol::Bytes token = {0x01, 0x02, 0x03, 0x04};
+        protocol::Bytes data1 = {0x0a, 0x0b, 0x0c};
+        protocol::Bytes data2 = {0x0a, 0x0b, 0x0d};
+
+        auto mac1 = protocol::create_message_mac(token, data1);
+        auto mac2 = protocol::create_message_mac(token, data1);
+        auto mac3 = protocol::create_message_mac(token, data2);
+
+        REQUIRE(mac1 == mac2);
+        REQUIRE(mac1 != mac3);
+    }
+
+    SECTION("verify_message_mac succeeds for matching inputs") {
+        // token_preimage must match the 32-byte token used by AccessToken (t1)
+        protocol::Bytes token_preimage(32, 0x11);
+        protocol::Bytes data = {0x01, 0x02, 0x03, 0x04};
+
+        // Derive VOPRF keypair and evaluated token to build token = preimage || evaluated
+        auto kp = voprf::keygen();
+        auto eval = protocol::accesstoken::evaluate_blinded_access_token(
+            kp.sk.to_bytes(),
+            ecgroup::G1Point::hash_and_map_to(
+                std::string(token_preimage.begin(), token_preimage.end())
+            ).to_bytes()
+        );
+
+        protocol::Bytes token = dia::utils::concat_bytes(token_preimage, eval);
+        auto mac = protocol::create_message_mac(token, data);
+
+        REQUIRE(protocol::verify_message_mac(kp.sk.to_bytes(), token_preimage, data, mac));
+    }
+
+    SECTION("verify_message_mac fails for wrong mac or data") {
+        protocol::Bytes token_preimage(32, 0x22);
+        protocol::Bytes data = {0x09, 0x08, 0x07};
+
+        auto kp = voprf::keygen();
+
+        // Correct mac
+        auto eval = protocol::accesstoken::evaluate_blinded_access_token(
+            kp.sk.to_bytes(),
+            ecgroup::G1Point::hash_and_map_to(
+                std::string(token_preimage.begin(), token_preimage.end())
+            ).to_bytes()
+        );
+        protocol::Bytes token = dia::utils::concat_bytes(token_preimage, eval);
+        auto mac = protocol::create_message_mac(token, data);
+
+        // Tampered mac
+        protocol::Bytes mac_bad = mac;
+        mac_bad[0] ^= 0xFF;
+
+        REQUIRE_FALSE(protocol::verify_message_mac(kp.sk.to_bytes(), token_preimage, data, mac_bad));
+
+        // Wrong data
+        protocol::Bytes data_bad = {0x09, 0x08, 0x06};
+        REQUIRE_FALSE(protocol::verify_message_mac(kp.sk.to_bytes(), token_preimage, data_bad, mac));
     }
 
     SECTION("Empty fields serialize/deserialize correctly") {

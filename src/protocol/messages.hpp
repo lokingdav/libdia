@@ -126,6 +126,17 @@ ProtocolMessage create_bye_message(const std::string& sender_id, const std::stri
 // Create a heartbeat message
 ProtocolMessage create_heartbeat_message(const std::string& sender_id, const std::string& topic);
 
+// Create a MAC for a message: K = H(token), MAC = HMAC(K, data)
+Bytes create_message_mac(const Bytes& token, const Bytes& data);
+
+// Verify a MAC for a message using a VOPRF private key and token preimage
+bool verify_message_mac(
+    const Bytes& at_private_key,
+    const Bytes& token_preimage,
+    const Bytes& data,
+    const Bytes& mac
+);
+
 } // namespace protocol
 
 #endif // DIA_PROTOCOL_MESSAGES_HPP

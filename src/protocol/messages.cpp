@@ -1,4 +1,7 @@
 #include "messages.hpp"
+#include "accesstoken.hpp"
+
+#include <sodium.h>
 
 namespace protocol {
 
@@ -8,6 +11,9 @@ using dia::utils::append_lp;
 using dia::utils::read_lp;
 using dia::utils::to_bytes;
 using dia::utils::read_string;
+using dia::utils::hash_all;
+using dia::utils::concat_bytes;
+using ecgroup::G1Point;
 
 // -----------------------------------------------------------------------------
 // Rtu serialization
@@ -188,6 +194,50 @@ ProtocolMessage create_heartbeat_message(const std::string& sender_id, const std
     msg.sender_id = sender_id;
     msg.topic = topic;
     return msg;
+}
+
+Bytes create_message_mac(const Bytes& token, const Bytes& data) {
+    if (token.empty()) {
+        throw std::runtime_error("MAC token is empty");
+    }
+
+    // K = H(token)
+    Bytes key = hash_all({token});
+
+    // MAC = HMAC(K, data)
+    Bytes mac(crypto_auth_hmacsha256_BYTES);
+    crypto_auth_hmacsha256_state state;
+    crypto_auth_hmacsha256_init(&state, key.data(), key.size());
+    crypto_auth_hmacsha256_update(&state, data.data(), data.size());
+    crypto_auth_hmacsha256_final(&state, mac.data());
+    return mac;
+}
+
+bool verify_message_mac(
+    const Bytes& at_private_key,
+    const Bytes& token_preimage,
+    const Bytes& data,
+    const Bytes& mac
+) {
+    if (at_private_key.empty() || token_preimage.empty()) {
+        return false;
+    }
+    if (mac.size() != crypto_auth_hmacsha256_BYTES) {
+        return false;
+    }
+
+    // Hash token preimage to group (no blinding), then evaluate with private key.
+    std::string token_str(token_preimage.begin(), token_preimage.end());
+    G1Point hashed_point = G1Point::hash_and_map_to(token_str);
+    Bytes hashed_bytes = hashed_point.to_bytes();
+
+    Bytes evaluated = accesstoken::evaluate_blinded_access_token(at_private_key, hashed_bytes);
+
+    // token = preimage || evaluated
+    Bytes token = concat_bytes(token_preimage, evaluated);
+    Bytes expected = create_message_mac(token, data);
+
+    return sodium_memcmp(expected.data(), mac.data(), mac.size()) == 0;
 }
 
 } // namespace protocol
