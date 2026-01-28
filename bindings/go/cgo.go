@@ -808,6 +808,47 @@ func (cs *CallState) CreateHeartbeatMessage() ([]byte, error) {
 	return C.GoBytes(unsafe.Pointer(out), C.int(outLen)), nil
 }
 
+// CreateMessageMAC creates a MAC for a message: K = H(token), MAC = HMAC(K, data).
+func CreateMessageMAC(token []byte, data []byte) ([]byte, error) {
+	ensureInit()
+	if len(token) == 0 || len(data) == 0 {
+		return nil, ErrInvalidArg
+	}
+
+	var out *C.uchar
+	var outLen C.size_t
+	rc := C.dia_message_create_mac(
+		(*C.uchar)(&token[0]), C.size_t(len(token)),
+		(*C.uchar)(&data[0]), C.size_t(len(data)),
+		&out, &outLen,
+	)
+	if err := rcErr(rc); err != nil {
+		return nil, err
+	}
+	defer C.dia_free_bytes(out)
+	return C.GoBytes(unsafe.Pointer(out), C.int(outLen)), nil
+}
+
+// VerifyMessageMAC verifies a message MAC using a VOPRF private key and token preimage.
+// Returns true if valid, false if invalid.
+func VerifyMessageMAC(atPrivateKey []byte, tokenPreimage []byte, data []byte, mac []byte) (bool, error) {
+	ensureInit()
+	if len(atPrivateKey) == 0 || len(tokenPreimage) == 0 || len(data) == 0 || len(mac) == 0 {
+		return false, ErrInvalidArg
+	}
+
+	rc := C.dia_message_verify_mac(
+		(*C.uchar)(&atPrivateKey[0]), C.size_t(len(atPrivateKey)),
+		(*C.uchar)(&tokenPreimage[0]), C.size_t(len(tokenPreimage)),
+		(*C.uchar)(&data[0]), C.size_t(len(data)),
+		(*C.uchar)(&mac[0]), C.size_t(len(mac)),
+	)
+	if rc < 0 {
+		return false, rcErr(rc)
+	}
+	return rc == 1, nil
+}
+
 // ============================================================================
 // Enrollment (Client-side)
 // ============================================================================

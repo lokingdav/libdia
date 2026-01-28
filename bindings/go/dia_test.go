@@ -756,6 +756,84 @@ func TestMessage_ByeAndHeartbeat(t *testing.T) {
 	}
 }
 
+func TestMessageMAC_CreateDeterministic(t *testing.T) {
+	token := []byte{0x01, 0x02, 0x03, 0x04}
+	data1 := []byte{0x0a, 0x0b, 0x0c}
+	data2 := []byte{0x0a, 0x0b, 0x0d}
+
+	mac1, err := CreateMessageMAC(token, data1)
+	if err != nil {
+		t.Fatalf("CreateMessageMAC: %v", err)
+	}
+	mac2, err := CreateMessageMAC(token, data1)
+	if err != nil {
+		t.Fatalf("CreateMessageMAC (repeat): %v", err)
+	}
+	mac3, err := CreateMessageMAC(token, data2)
+	if err != nil {
+		t.Fatalf("CreateMessageMAC (data2): %v", err)
+	}
+
+	if !bytes.Equal(mac1, mac2) {
+		t.Error("MAC should be deterministic for same inputs")
+	}
+	if bytes.Equal(mac1, mac3) {
+		t.Error("MAC should differ when data changes")
+	}
+}
+
+func TestMessageMAC_VerifyInvalid(t *testing.T) {
+	// Invalid args
+	if _, err := CreateMessageMAC(nil, []byte{0x01}); err == nil {
+		t.Error("CreateMessageMAC should fail on empty token")
+	}
+
+	if ok, err := VerifyMessageMAC(nil, []byte{0x01}, []byte{0x02}, []byte{0x03}); err == nil || ok {
+		t.Error("VerifyMessageMAC should fail on empty private key")
+	}
+
+	// Mismatched MAC should be false (not an error) with a valid private key
+	serverCfg, err := GenerateServerConfig(30)
+	if err != nil {
+		t.Fatalf("GenerateServerConfig: %v", err)
+	}
+	defer serverCfg.Close()
+
+	// Extract AT_SK from env
+	envStr, err := serverCfg.ToEnv()
+	if err != nil {
+		t.Fatalf("ToEnv: %v", err)
+	}
+
+	var atSk []byte
+	for _, line := range strings.Split(envStr, "\n") {
+		if strings.HasPrefix(line, "AT_SK=") {
+			hexStr := strings.TrimPrefix(line, "AT_SK=")
+			atSk, err = hexDecode(hexStr)
+			if err != nil {
+				t.Fatalf("hexDecode AT_SK: %v", err)
+			}
+			break
+		}
+	}
+	if len(atSk) == 0 {
+		t.Fatal("Could not find AT_SK in server config")
+	}
+
+	ok, err := VerifyMessageMAC(
+		atSk,
+		bytes.Repeat([]byte{0x11}, 32),
+		[]byte{0x0a, 0x0b},
+		bytes.Repeat([]byte{0xff}, 32),
+	)
+	if err != nil {
+		t.Fatalf("VerifyMessageMAC: %v", err)
+	}
+	if ok {
+		t.Error("VerifyMessageMAC should be false for invalid MAC")
+	}
+}
+
 // ============================================================================
 // Enrollment Tests
 // ============================================================================

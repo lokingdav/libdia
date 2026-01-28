@@ -587,6 +587,53 @@ int dia_message_create_heartbeat(const dia_callstate_t* state,
     }
 }
 
+int dia_message_create_mac(const unsigned char* token,
+                           size_t token_len,
+                           const unsigned char* data,
+                           size_t data_len,
+                           unsigned char** out,
+                           size_t* out_len) {
+    if (!token || token_len == 0 || !data || !out || !out_len) return DIA_ERR_INVALID_ARG;
+
+    try {
+        Bytes t(token, token + token_len);
+        Bytes d(data, data + data_len);
+        Bytes mac = create_message_mac(t, d);
+        copy_to_c_bytes(mac, out, out_len);
+        return DIA_OK;
+    } catch (...) {
+        return DIA_ERR;
+    }
+}
+
+int dia_message_verify_mac(const unsigned char* at_private_key,
+                           size_t at_private_key_len,
+                           const unsigned char* token_preimage,
+                           size_t token_preimage_len,
+                           const unsigned char* data,
+                           size_t data_len,
+                           const unsigned char* mac,
+                           size_t mac_len) {
+    if (!at_private_key || at_private_key_len == 0 ||
+        !token_preimage || token_preimage_len == 0 ||
+        !data || data_len == 0 ||
+        !mac || mac_len == 0) {
+        return DIA_ERR_INVALID_ARG;
+    }
+
+    try {
+        Bytes key(at_private_key, at_private_key + at_private_key_len);
+        Bytes preimage(token_preimage, token_preimage + token_preimage_len);
+        Bytes d(data, data + data_len);
+        Bytes m(mac, mac + mac_len);
+
+        bool ok = verify_message_mac(key, preimage, d, m);
+        return ok ? 1 : 0;
+    } catch (...) {
+        return DIA_ERR;
+    }
+}
+
 /*==============================================================================
  * DR Messaging
  *============================================================================*/

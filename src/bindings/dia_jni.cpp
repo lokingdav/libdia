@@ -723,6 +723,60 @@ static jbyteArray native_messageCreateHeartbeat(JNIEnv* env, jclass, jlong handl
     return result;
 }
 
+static jbyteArray native_messageCreateMac(JNIEnv* env, jclass, jbyteArray jToken, jbyteArray jData) {
+    auto token = getBytes(env, jToken);
+    auto data = getBytes(env, jData);
+
+    if (token.empty() || data.empty()) {
+        throwIllegalArg(env, "token and data are required");
+        return nullptr;
+    }
+
+    unsigned char* out = nullptr;
+    size_t outLen = 0;
+    if (!rcIsOk(env, "dia_message_create_mac", dia_message_create_mac(
+        token.data(), token.size(),
+        data.data(), data.size(),
+        &out, &outLen
+    ))) {
+        return nullptr;
+    }
+    jbyteArray result = makeByteArray(env, out, outLen);
+    dia_free_bytes(out);
+    return result;
+}
+
+static jboolean native_messageVerifyMac(
+    JNIEnv* env,
+    jclass,
+    jbyteArray jAtPrivateKey,
+    jbyteArray jTokenPreimage,
+    jbyteArray jData,
+    jbyteArray jMac
+) {
+    auto atPriv = getBytes(env, jAtPrivateKey);
+    auto preimage = getBytes(env, jTokenPreimage);
+    auto data = getBytes(env, jData);
+    auto mac = getBytes(env, jMac);
+
+    if (atPriv.empty() || preimage.empty() || data.empty() || mac.empty()) {
+        throwIllegalArg(env, "atPrivateKey, tokenPreimage, data, and mac are required");
+        return JNI_FALSE;
+    }
+
+    int result = dia_message_verify_mac(
+        atPriv.data(), atPriv.size(),
+        preimage.data(), preimage.size(),
+        data.data(), data.size(),
+        mac.data(), mac.size()
+    );
+    if (result < 0) {
+        rcIsOk(env, "dia_message_verify_mac", result);
+        return JNI_FALSE;
+    }
+    return result == 1 ? JNI_TRUE : JNI_FALSE;
+}
+
 /* ========================== DR Messaging ================================== */
 
 static jbyteArray native_drEncrypt(JNIEnv* env, jclass, jlong handle, jbyteArray jPlaintext) {
@@ -932,6 +986,8 @@ static JNINativeMethod gMethods[] = {
     { "messageGetTopic",      "(J)Ljava/lang/String;",      (void*)native_messageGetTopic },
     { "messageCreateBye",     "(J)[B",                      (void*)native_messageCreateBye },
     { "messageCreateHeartbeat", "(J)[B",                    (void*)native_messageCreateHeartbeat },
+    { "messageCreateMac",     "([B[B)[B",                   (void*)native_messageCreateMac },
+    { "messageVerifyMac",     "([B[B[B[B)Z",                (void*)native_messageVerifyMac },
 
     // DR Messaging
     { "drEncrypt",     "(J[B)[B",                           (void*)native_drEncrypt },

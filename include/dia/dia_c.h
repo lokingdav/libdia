@@ -401,6 +401,30 @@ int dia_message_create_heartbeat(const dia_callstate_t* state,
                                  unsigned char** out,
                                  size_t* out_len);
 
+/**
+ * Create a MAC for a message: K = H(token), MAC = HMAC(K, data)
+ * Caller must free output with dia_free_bytes().
+ */
+int dia_message_create_mac(const unsigned char* token,
+                           size_t token_len,
+                           const unsigned char* data,
+                           size_t data_len,
+                           unsigned char** out,
+                           size_t* out_len);
+
+/**
+ * Verify a MAC for a message using a VOPRF private key and token preimage.
+ * Returns 1 if valid, 0 if invalid, or DIA_ERR_* on error.
+ */
+int dia_message_verify_mac(const unsigned char* at_private_key,
+                           size_t at_private_key_len,
+                           const unsigned char* token_preimage,
+                           size_t token_preimage_len,
+                           const unsigned char* data,
+                           size_t data_len,
+                           const unsigned char* mac,
+                           size_t mac_len);
+
 /*==============================================================================
  * DR Messaging (post-RUA secure messaging)
  *============================================================================*/
