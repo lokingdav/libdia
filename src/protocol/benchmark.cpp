@@ -1137,6 +1137,18 @@ std::vector<RoleBenchResult> run_protocol_role_benchmarks(const BenchOptions& op
 
     const std::vector<RoleDef> roles = {
         {
+            "Enrollment client",
+            {"Enrollment client: create_request (tickets=1)", "Enrollment client: finalize (tickets=1)"},
+            wb.enrollment_req,
+            wb.enrollment_resp,
+        },
+        {
+            "Enrollment server",
+            {"Enrollment server: process_request (tickets=1)"},
+            wb.enrollment_resp,
+            wb.enrollment_req,
+        },
+        {
             "AKE caller",
             {"AKE caller: ake_request", "AKE caller: ake_complete"},
             wb.ake_req + wb.ake_complete,
